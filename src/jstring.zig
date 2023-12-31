@@ -1,144 +1,146 @@
 const std = @import("std");
 const testing = std.testing;
 
-// target: create a reusable string lib for zig with
+// target: create a reusable string lib for myself with
 //   1. CPU cache efficiency considered (use the technique in bunjs)
 //   2. all familiar methods can find in javascript string:
 //        https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String
+pub const JStringArenaAllocator = struct {
+    const Self = @This();
 
-const Storage = struct {
-    allocator: std.mem.Allocator = undefined,
-    mem: []u8 = undefined,
-    capacity: u64 = 0,
-    used: u64 = 0,
-
-    pub const Fragment = struct {
-        start: u64,
-        end: u64,
+    const Allocation = struct {
+        ptr: [*]u8,
+        len: usize,
     };
+    const AllocatedMap = std.AutoHashMap(u64, Allocation);
 
-    // we store every string in our storage in 0-sentitial format
+    base_allocator: std.mem.Allocator,
+    allocated_map: AllocatedMap,
+    vtable: std.mem.Allocator.VTable,
 
-    pub fn init(allocator: std.mem.Allocator, init_capacity: u64) Storage {
-        const allocated = allocator.alignedAlloc(u8, null, init_capacity) catch unreachable;
-
-        // set the first byte to be zero, so that later all empty string can point to beginning of mem
-        allocated[0] = 0;
-
-        return Storage{
-            .allocator = allocator,
-            .mem = allocated,
-            .capacity = init_capacity,
-            .used = 1, // used = 1 because of the first byte reserved for all empty JString
+    pub fn init(base_allocator: std.mem.Allocator) Self {
+        return Self{
+            .base_allocator = base_allocator,
+            .allocated_map = AllocatedMap.init(base_allocator),
+            .vtable = .{
+                .alloc = alloc,
+                .resize = resize,
+                .free = free,
+            },
         };
     }
 
-    pub fn deinit(this: *const Storage) void {
-        this.allocator.free(this.mem);
+    pub fn allocator(this: *Self) std.mem.Allocator {
+        return std.mem.Allocator{
+            .ptr = this,
+            .vtable = &this.vtable,
+        };
     }
 
-    pub fn addU8Slice(this: *const Storage, str: []const u8) Storage.Fragment {
-        // TODO: need to ensure capacity first
-        const self: *Storage = @constCast(this);
-        const start = self.used;
-        const end = start + str.len;
-        @memcpy(self.mem[start..end], str);
-        @memset(self.mem[end .. end + 1], 0);
-        self.used += str.len + 1;
-        return Storage.Fragment{
-            .start = start,
-            .end = end,
-        };
+    pub fn deinit(this: *Self) void {
+        defer this.allocated_map.deinit();
+        var it = this.allocated_map.iterator();
+        while (it.next()) |record| {
+            const allocation = @as(Allocation, record.value_ptr.*);
+            this.base_allocator.free(allocation.ptr[0..allocation.len]);
+        }
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
+        const self: *JStringArenaAllocator = @ptrFromInt(@intFromPtr(ctx));
+        const result = self.base_allocator.rawAlloc(len, ptr_align, ret_addr);
+        if (result) |ptr| {
+            const key = @intFromPtr(ptr);
+            self.allocated_map.put(key, .{ .ptr = ptr, .len = len }) catch unreachable;
+        }
+        return result;
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
+        const self: *JStringArenaAllocator = @ptrFromInt(@intFromPtr(ctx));
+        const result = self.base_allocator.rawResize(buf, buf_align, new_len, ret_addr);
+        if (result) {
+            const key = @intFromPtr(buf.ptr);
+            self.allocated_map.put(key, .{ .ptr = buf.ptr, .len = new_len }) catch unreachable;
+        }
+        return result;
+    }
+
+    fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
+        const self: *JStringArenaAllocator = @ptrFromInt(@intFromPtr(ctx));
+        const key = @intFromPtr(buf.ptr);
+        _ = self.allocated_map.remove(key);
+        self.base_allocator.rawFree(buf, buf_align, ret_addr);
     }
 };
 
-pub const JString = struct {
-    // a string is simply represented as a slice of immutable from the storage
-    slice: []const u8 = undefined,
+pub const JStringUnmanaged = struct {
+    slice: []const u8,
+    len: usize,
 
-    pub fn len(this: *const JString) usize {
-        return this.slice.len;
+    pub fn deinit(this: *const JStringUnmanaged, allocator: std.mem.Allocator) void {
+        allocator.free(this.slice);
     }
 
-    pub fn eql(this: *const JString, that: *const JString) bool {
+    // constructors
+
+    pub fn newEmpty(allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+        const slice = try allocator.alloc(u8, 0);
+        return JStringUnmanaged{
+            .slice = slice,
+            .len = 0,
+        };
+    }
+
+    pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) anyerror!JStringUnmanaged {
+        const slice = try allocator.alloc(u8, string_slice.len);
+        @memcpy(slice, string_slice);
+        return JStringUnmanaged{
+            .slice = slice,
+            .len = string_slice.len,
+        };
+    }
+
+    pub fn newFromJStringUnmanaged(allocator: std.mem.Allocator, that: JStringUnmanaged) anyerror!JStringUnmanaged {
+        const slice = try allocator.alloc(u8, that.len);
+        @memcpy(slice, that.slice);
+        return JStringUnmanaged{
+            .slice = slice,
+            .len = that.len,
+        };
+    }
+
+    // eql functions
+
+    pub inline fn eqlSlice(this: *const JStringUnmanaged, string_slice: []const u8) bool {
+        return std.mem.eql(u8, this.slice, string_slice);
+    }
+
+    pub inline fn eqlJStringUmanaged(this: *const JStringUnmanaged, that: JStringUnmanaged) bool {
         return std.mem.eql(u8, this.slice, that.slice);
     }
 };
 
-pub fn genJStringCreatorWithInitCapacity(comptime allocator: std.mem.Allocator, comptime init_capacity: u64) type {
-    return struct {
-        const Self = @This();
+// >>> all your tests belong to me and list in belowing <<<
 
-        allocator: std.mem.Allocator,
-        init_capacity: u64,
-        storage: Storage,
-
-        pub fn init() Self {
-            return Self{
-                .allocator = allocator,
-                .init_capacity = init_capacity,
-                .storage = Storage.init(allocator, init_capacity),
-            };
-        }
-
-        pub fn deinit(this: *const Self) void {
-            this.storage.deinit();
-        }
-
-        pub fn newEmpty(this: *const Self) JString {
-            return JString{
-                .slice = this.storage.mem[0..0],
-            };
-        }
-
-        pub fn newFrom(this: *const Self, str: []const u8) JString {
-            const self: *Self = @constCast(this);
-            const fragment = self.storage.addU8Slice(str);
-            return JString{
-                .slice = this.storage.mem[fragment.start..fragment.end],
-            };
-        }
-    };
+test "newFromXXX" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
+    try testing.expectEqual(str1.len, 0);
+    const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
+    try testing.expectEqual(str2.len, 11);
+    const str3 = try JStringUnmanaged.newFromJStringUnmanaged(arena.allocator(), str2);
+    try testing.expectEqual(str3.len, 11);
 }
 
-pub fn genJStringCreator(comptime allocator: std.mem.Allocator) type {
-    return genJStringCreatorWithInitCapacity(allocator, 256 * std.mem.page_size);
-}
-
-test "both const/var work" {
-    const jstring_creator = genJStringCreator(testing.allocator).init();
-    defer jstring_creator.deinit();
-    var str = jstring_creator.newEmpty();
-    try testing.expectEqual(str.len(), 0);
-
-    var jstring_creator2 = genJStringCreator(testing.allocator).init();
-    defer jstring_creator2.deinit();
-    str = jstring_creator2.newFrom("hello,world");
-    try testing.expectEqual(str.len(), 11);
-}
-
-test "newEmpty should work" {
-    const jstring_creator = genJStringCreator(testing.allocator).init();
-    defer jstring_creator.deinit();
-
-    const str1 = jstring_creator.newEmpty();
-    try testing.expectEqual(str1.len(), 0);
-
-    const str2 = jstring_creator.newEmpty();
-    try testing.expectEqual(str2.len(), 0);
-
-    // their underlying slice should be the same, equal to the beginning of storage.mem
-    try testing.expectEqual(str1.slice, str2.slice);
-    try testing.expectEqual(str1.slice, jstring_creator.storage.mem[0..0]);
-
-    // and empty JStrings should all eql
-    try testing.expect(str1.eql(&str2));
-}
-
-test "newFrom should work" {
-    const jstring_creator = genJStringCreator(testing.allocator).init();
-    defer jstring_creator.deinit();
-
-    const str1 = jstring_creator.newFrom("hello,world!");
-    try testing.expectEqual(str1.len(), 12);
+test "eqlXXX" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
+    const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
+    const str3 = try JStringUnmanaged.newFromJStringUnmanaged(arena.allocator(), str2);
+    try testing.expect(str1.eqlSlice(""));
+    try testing.expect(str2.eqlJStringUmanaged(str3));
+    try testing.expect(str3.eqlSlice("hello,world"));
 }

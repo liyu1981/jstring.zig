@@ -8,8 +8,8 @@
       "type": "lldb",
       "request": "launch",
       "name": "Debug test",
-      "program": "${workspaceFolder}/../bun/.cache/zig/zig",
-      "args": ["test", "src/jstring.zig"],
+      "program": "${workspaceFolder}/zig-out/bin/my-test",
+      "args": [],
       "cwd": "${workspaceFolder}"
     }
   ]
