@@ -261,7 +261,19 @@ pub const JStringUnmanaged = struct {
         return this.concatFormat(allocator, fmt_buf[0..fmt_len], rest_items);
     }
 
-    // TODO endsWith
+    // ** endsWith
+
+    pub inline fn endsWith(this: *const JStringUnmanaged, suffix: JStringUnmanaged) bool {
+        return this.endsWithSlice(suffix.slice);
+    }
+
+    pub fn endsWithSlice(this: *const JStringUnmanaged, suffix_slice: []const u8) bool {
+        if (this.len < suffix_slice.len) {
+            return false;
+        }
+        return std.mem.eql(u8, this.slice[this.slice.len - suffix_slice.len ..], suffix_slice);
+    }
+
     // TODO fromCharCode
     // TODO fromCodePoint
     // TODO includes
@@ -280,7 +292,20 @@ pub const JStringUnmanaged = struct {
     // TODO search
     // TODO slice
     // TODO split
-    // TODO startsWith
+
+    // ** startsWith
+
+    pub inline fn startsWith(this: *const JStringUnmanaged, prefix: JStringUnmanaged) bool {
+        return this.startsWithSlice(prefix.slice);
+    }
+
+    pub fn startsWithSlice(this: *const JStringUnmanaged, prefix_slice: []const u8) bool {
+        if (this.len < prefix_slice.len) {
+            return false;
+        }
+        return std.mem.eql(u8, this.slice[0..prefix_slice.len], prefix_slice);
+    }
+
     // TODO toLocaleLowerCase
     // TODO toLocaleUpperCase
     // TODO toLowerCase
@@ -342,4 +367,20 @@ test "concat" {
     const str6 = try str1.concatTuple(arena.allocator(), .{ " jstring", 5 });
     // std.debug.print("\n{s}\n", .{str6.slice});
     try testing.expect(str6.eqlSlice("hello,world jstring5"));
+}
+
+test "startsWith/endsWith" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
+    const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+    try testing.expect(str1.startsWith(str2));
+    try testing.expect(str1.startsWithSlice(""));
+    try testing.expect(str1.startsWithSlice("hello"));
+    try testing.expect(!str1.startsWithSlice("hello,world,more"));
+    const str3 = try JStringUnmanaged.newFromSlice(arena.allocator(), "world");
+    try testing.expect(str1.endsWith(str3));
+    try testing.expect(str1.endsWithSlice(""));
+    try testing.expect(str1.endsWithSlice("world"));
+    try testing.expect(!str1.endsWithSlice("hello,world,more"));
 }
