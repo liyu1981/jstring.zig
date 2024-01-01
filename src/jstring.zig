@@ -79,7 +79,7 @@ pub const JStringUnmanaged = struct {
     slice: []const u8,
     len: usize,
 
-    pub fn deinit(this: *const JStringUnmanaged, allocator: std.mem.Allocator) void {
+    pub inline fn deinit(this: *const JStringUnmanaged, allocator: std.mem.Allocator) void {
         allocator.free(this.slice);
     }
 
@@ -147,8 +147,8 @@ pub const JStringUnmanaged = struct {
 
     // ** concat
 
-    /// Concat jstrings in rest_jstrings in order, return a new allocated jstring.
-    /// If rest_jstrings.len == 0, will return a copy of this jstring
+    /// Concat jstrings in rest_jstrings in order, return a new allocated
+    /// jstring. If rest_jstrings.len == 0, will return a copy of this jstring.
     pub fn concat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_jstrings: []const JStringUnmanaged) anyerror!JStringUnmanaged {
         if (rest_jstrings.len == 0) {
             return this.clone(allocator);
@@ -176,8 +176,9 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    /// Concat jstrings by format with fmt & .{ data }. It is a shortcut for first creating tmp str from
-    /// JStringUnmanaged.newFromFormat then second this.concat(tmp str). (or below psudeo code)
+    /// Concat jstrings by format with fmt & .{ data }. It is a shortcut for
+    /// first creating tmp str from JStringUnmanaged.newFromFormat then second
+    /// this.concat(tmp str). (or below psudeo code)
     ///
     ///   var tmp_jstring = JStringUnmanaged.newFromFormat(allocator, fmt, rest_items);
     ///   defer tmp_jstring.deinit(allocator);
@@ -311,9 +312,75 @@ pub const JStringUnmanaged = struct {
     // TODO toLowerCase
     // TODO toUpperCase
     // TODO toWellFormed
-    // TODO trim
-    // TODO trimEnd
-    // TODO trimStart
+
+    // ** trim
+
+    /// essentially =trimStart(trimEnd()). All temp strings produced in steps
+    /// are deinited.
+    pub fn trim(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+        const str1 = try this.trimStart(allocator);
+        if (str1.len == 0) {
+            return str1;
+        }
+        const str2 = try str1.trimEnd(allocator);
+        defer str1.deinit(allocator);
+        return str2;
+    }
+
+    // ** trimEnd
+
+    /// trim blank chars(' ', '\t', '\n' and '\r') from the end. If there is
+    /// nothing to trim it will return a clone of original string.
+    pub fn trimEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+        const first_nonblank = brk: {
+            var i = this.slice.len - 1;
+            while (i >= 0) {
+                switch (this.slice[i]) {
+                    ' ', '\t', '\n', '\r' => {
+                        if (i > 0) {
+                            i -= 1;
+                            continue;
+                        } else {
+                            break :brk 0;
+                        }
+                    },
+                    else => break :brk i,
+                }
+            }
+            break :brk 0;
+        };
+        if (first_nonblank == this.slice.len - 1) {
+            return this.clone(allocator);
+        } else if (first_nonblank == 0) {
+            return JStringUnmanaged.newEmpty(allocator);
+        } else {
+            const new_slice = this.slice[0 .. first_nonblank + 1];
+            return JStringUnmanaged.newFromSlice(allocator, new_slice);
+        }
+    }
+
+    // ** trimStart
+
+    /// trim blank chars(' ', '\t', '\n' and '\r') from beginning. If there is
+    /// nothing to trim it will return a clone of original string.
+    pub fn trimStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+        const first_nonblank = brk: {
+            for (this.slice, 0..) |char, i| {
+                switch (char) {
+                    ' ', '\t', '\n', '\r' => continue,
+                    else => break :brk i,
+                }
+            }
+            break :brk this.slice.len;
+        };
+        if (first_nonblank == 0) {
+            return this.clone(allocator);
+        } else {
+            const new_slice = this.slice[first_nonblank..];
+            return JStringUnmanaged.newFromSlice(allocator, new_slice);
+        }
+    }
+
     // TODO valueOf
 };
 
@@ -383,4 +450,37 @@ test "startsWith/endsWith" {
     try testing.expect(str1.endsWithSlice(""));
     try testing.expect(str1.endsWithSlice("world"));
     try testing.expect(!str1.endsWithSlice("hello,world,more"));
+}
+
+test "trim/trimStart/trimEnd" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "  hello,world");
+        const str2 = try str1.trimStart(arena.allocator());
+        try testing.expect(str2.eqlSlice("hello,world"));
+        const str3 = try str2.trimStart(arena.allocator());
+        try testing.expect(str3.eqlSlice("hello,world"));
+        const str4 = try JStringUnmanaged.newFromSlice(arena.allocator(), "  \t  ");
+        const str5 = try str4.trimStart(arena.allocator());
+        try testing.expect(str5.eqlSlice(""));
+    }
+    {
+        const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world  ");
+        const str2 = try str1.trimEnd(arena.allocator());
+        try testing.expect(str2.eqlSlice("hello,world"));
+        const str3 = try str2.trimEnd(arena.allocator());
+        try testing.expect(str3.eqlSlice("hello,world"));
+        const str4 = try JStringUnmanaged.newFromSlice(arena.allocator(), "  \t  ");
+        const str5 = try str4.trimEnd(arena.allocator());
+        try testing.expect(str5.eqlSlice(""));
+    }
+    {
+        const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "  hello,world  ");
+        const str2 = try str1.trim(arena.allocator());
+        try testing.expect(str2.eqlSlice("hello,world"));
+        const str4 = try JStringUnmanaged.newFromSlice(arena.allocator(), "  \t  ");
+        const str5 = try str4.trimEnd(arena.allocator());
+        try testing.expect(str5.eqlSlice(""));
+    }
 }
