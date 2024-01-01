@@ -220,45 +220,17 @@ pub const JStringUnmanaged = struct {
             @compileError("32 arguments max are supported per format call");
         }
 
-        comptime var fmt_buf: [24 * 32]u8 = undefined;
+        // max 32 arguments, and each of them will not have long (<8) specifier
+        comptime var fmt_buf: [8 * 32]u8 = undefined;
         _ = &fmt_buf;
         comptime var fmt_len: usize = 0;
         comptime {
             var fmt_print_slice: []u8 = fmt_buf[0..];
-            var printed_fmt: []u8 = undefined;
             for (fields_info) |field_info| {
-                switch (@typeInfo(field_info.type)) {
-                    .Array => {
-                        printed_fmt = try std.fmt.bufPrint(fmt_print_slice, "{{any}}", .{});
-                        fmt_len += printed_fmt.len;
-                        fmt_print_slice = fmt_buf[fmt_len..];
-                    },
-                    .Pointer => |ptr_info| switch (ptr_info.size) {
-                        .One, .Many, .C => {
-                            printed_fmt = try std.fmt.bufPrint(fmt_print_slice, "{{s}}", .{});
-                            fmt_len += printed_fmt.len;
-                            fmt_print_slice = fmt_buf[fmt_len..];
-                        },
-                        .Slice => {
-                            printed_fmt = try std.fmt.bufPrint(fmt_print_slice, "{{any}}", .{});
-                            fmt_len += printed_fmt.len;
-                            fmt_print_slice = fmt_buf[fmt_len..];
-                        },
-                    },
-                    .Optional => {
-                        @compileError("not support Optional!");
-                    },
-                    .ErrorUnion => {
-                        @compileError("not support ErrorUnion!");
-                    },
-                    else => {
-                        printed_fmt = try std.fmt.bufPrint(fmt_print_slice, "{{}}", .{});
-                        fmt_len += printed_fmt.len;
-                        fmt_print_slice = fmt_buf[fmt_len..];
-                    },
-                }
+                _bufPrintFmt(@typeInfo(field_info.type), &fmt_buf, &fmt_len, &fmt_print_slice);
             }
         }
+        // std.debug.print("\n{s}\n", .{fmt_buf[0..fmt_len]});
         return this.concatFormat(allocator, fmt_buf[0..fmt_len], rest_items);
     }
 
@@ -384,6 +356,64 @@ pub const JStringUnmanaged = struct {
     // TODO valueOf
 };
 
+// >>> internal functions
+
+fn _bufPrintFmt(comptime type_info: std.builtin.Type, comptime fmt_buf: []u8, comptime fmt_len_: *usize, comptime fmt_print_slice_: *[]u8) void {
+    var printed_fmt = try std.fmt.bufPrint(fmt_print_slice_.*, "{{", .{});
+    fmt_len_.* = fmt_len_.* + printed_fmt.len;
+    fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
+
+    _bufPrintSpecifier(type_info, fmt_buf, fmt_len_, fmt_print_slice_);
+
+    printed_fmt = try std.fmt.bufPrint(fmt_print_slice_.*, "}}", .{});
+    fmt_len_.* = fmt_len_.* + printed_fmt.len;
+    fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
+}
+
+fn _bufPrintSpecifier(comptime type_info: std.builtin.Type, comptime fmt_buf: []u8, comptime fmt_len_: *usize, comptime fmt_print_slice_: *[]u8) void {
+    var printed_fmt: []u8 = undefined;
+    switch (type_info) {
+        .Array => {
+            printed_fmt = try std.fmt.bufPrint(fmt_print_slice_.*, "any", .{});
+            fmt_len_.* = fmt_len_.* + printed_fmt.len;
+            fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
+        },
+        .Pointer => |ptr_info| switch (ptr_info.size) {
+            .One, .Many, .C => {
+                printed_fmt = try std.fmt.bufPrint(fmt_print_slice_.*, "s", .{});
+                fmt_len_.* = fmt_len_.* + printed_fmt.len;
+                fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
+            },
+            .Slice => {
+                printed_fmt = try std.fmt.bufPrint(fmt_print_slice_.*, "any", .{});
+                fmt_len_.* = fmt_len_.* + printed_fmt.len;
+                fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
+            },
+        },
+        .Optional => |info| {
+            printed_fmt = try std.fmt.bufPrint(fmt_print_slice_.*, "?", .{});
+            fmt_len_.* = fmt_len_.* + printed_fmt.len;
+            fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
+            _bufPrintSpecifier(@typeInfo(info.child), fmt_buf, fmt_len_, fmt_print_slice_);
+        },
+        .ErrorUnion => |info| {
+            printed_fmt = try std.fmt.bufPrint(fmt_print_slice_.*, "!", .{});
+            fmt_len_.* = fmt_len_.* + printed_fmt.len;
+            fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
+            _bufPrintSpecifier(@typeInfo(info.payload), fmt_buf, fmt_len_, fmt_print_slice_);
+        },
+        else => {
+            printed_fmt = try std.fmt.bufPrint(fmt_print_slice_.*, "", .{});
+            fmt_len_.* = fmt_len_.* + printed_fmt.len;
+            fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
+        },
+    }
+}
+
+fn _test_return_error_union(value_or_error: bool, value: i32, err: anyerror) !i32 {
+    return if (value_or_error) value else err;
+}
+
 // >>> all your tests belong to me and list in belowing <<<
 
 test "constructors" {
@@ -431,9 +461,16 @@ test "concat" {
     try testing.expect(str4.slice.ptr != str1.slice.ptr);
     const str5 = try str1.concatFormat(arena.allocator(), "{s}", .{" jstring"});
     try testing.expect(str5.eqlSlice("hello,world jstring"));
-    const str6 = try str1.concatTuple(arena.allocator(), .{ " jstring", 5 });
+    const optional_6: ?i32 = 6;
+    const error1 = _test_return_error_union(false, 0, error.OutOfMemory);
+    const str6 = try str1.concatTuple(arena.allocator(), .{
+        " jstring",
+        5,
+        optional_6,
+        error1,
+    });
     // std.debug.print("\n{s}\n", .{str6.slice});
-    try testing.expect(str6.eqlSlice("hello,world jstring5"));
+    try testing.expect(str6.eqlSlice("hello,world jstring56error.OutOfMemory"));
 }
 
 test "startsWith/endsWith" {
