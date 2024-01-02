@@ -229,7 +229,7 @@ pub const JStringUnmanaged = struct {
     /// as prefer utf-8 string. Same to Javascript, accept index as i32: when
     /// postive is from beginning; when negative is from ending; when
     /// index == 0, return the the first char if not empty.
-    pub fn at(this: *JStringUnmanaged, index: i32) anyerror!u21 {
+    pub fn at(this: *JStringUnmanaged, index: isize) anyerror!u21 {
         const utf8_len = try this.utf8Len();
         if (index >= utf8_len) {
             return error.IndexOutOfBounds;
@@ -282,9 +282,22 @@ pub const JStringUnmanaged = struct {
         unreachable;
     }
 
-    // TODO charCodeAt
+    // ** charCodeAt
 
-    // TODO codePointAt
+    pub inline fn charCodeAt(this: *const JStringUnmanaged, index: isize) anyerror!u21 {
+        _ = this;
+        _ = index;
+        @compileError("charCodeAt does not make sense in zig, please use at or charAt!");
+    }
+
+    // ** codePointAt
+
+    /// as in zig we use u21 for char, so codePointAt is a trival alias to at().
+    pub inline fn codePointAt(this: *const JStringUnmanaged, index: isize) anyerror!u21 {
+        _ = this;
+        _ = index;
+        @compileError("codePointAt does not make sense in zig, please use at or charAt!");
+    }
 
     // ** concat
 
