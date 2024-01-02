@@ -78,6 +78,9 @@ pub const JStringArenaAllocator = struct {
 pub const JStringUnmanaged = struct {
     slice: []const u8,
     len: usize,
+    utf8_view_inited: bool = false,
+    utf8_view: std.unicode.Utf8View = undefined,
+    utf8_len: usize = 0,
 
     pub inline fn deinit(this: *const JStringUnmanaged, allocator: std.mem.Allocator) void {
         allocator.free(this.slice);
@@ -121,6 +124,24 @@ pub const JStringUnmanaged = struct {
 
     // utils
 
+    /// First time call utf8Len will init the utf8_view and calculate len once.
+    /// After that we will just use the cached view and len.
+    pub fn utf8Len(this: *JStringUnmanaged) anyerror!usize {
+        if (!this.utf8_view_inited) {
+            this.utf8_view = try std.unicode.Utf8View.init(this.slice);
+            this.utf8_view_inited = true;
+            this.utf8_len = brk: {
+                var utf8_len: usize = 0;
+                var it = this.utf8_view.iterator();
+                while (it.nextCodepoint()) |_| {
+                    utf8_len += 1;
+                }
+                break :brk utf8_len;
+            };
+        }
+        return this.utf8_len;
+    }
+
     pub inline fn clone(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         return JStringUnmanaged.newFromJStringUnmanaged(allocator, this.*);
     }
@@ -140,9 +161,37 @@ pub const JStringUnmanaged = struct {
     // methods as listed at https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String
 
     // TODO iterator
+
     // TODO at
-    // TODO charAt
+
+    // ** charAt
+
+    /// different to Javascript's string.charAt, return u8 of index, as prefer utf-8
+    /// string. Same to Javascript, accept index as i32: when postive is from
+    /// beginning; when negative is from ending; when index == 0, return the
+    /// the first char if not empty.
+    pub fn charAt(this: *const JStringUnmanaged, index: i32) anyerror!u8 {
+        if (index >= this.len) {
+            return error.IndexOutOfBounds;
+        }
+
+        if ((-index) >= this.len) {
+            return error.IndexOutOfBounds;
+        }
+
+        if (index >= 0) {
+            return this.slice[@intCast(index)];
+        }
+
+        if (index < 0) {
+            return this.slice[this.len - @as(usize, @intCast(-index))];
+        }
+
+        unreachable;
+    }
+
     // TODO charCodeAt
+
     // TODO codePointAt
 
     // ** concat
@@ -432,16 +481,22 @@ test "constructors" {
 test "utils" {
     var arena = JStringArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
-    const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
-    const str3 = try JStringUnmanaged.newFromJStringUnmanaged(arena.allocator(), str2);
-    try testing.expect(str1.eqlSlice(""));
-    try testing.expect(str1.isEmpty());
-    try testing.expect(str2.eqlJStringUmanaged(str3));
-    try testing.expect(str3.eqlSlice("hello,world"));
-    const str4 = try str3.clone(arena.allocator());
-    try testing.expect(str4.eqlSlice("hello,world"));
-    try testing.expect(str3.slice.ptr != str4.slice.ptr);
+    {
+        const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
+        const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
+        const str3 = try JStringUnmanaged.newFromJStringUnmanaged(arena.allocator(), str2);
+        try testing.expect(str1.eqlSlice(""));
+        try testing.expect(str1.isEmpty());
+        try testing.expect(str2.eqlJStringUmanaged(str3));
+        try testing.expect(str3.eqlSlice("hello,world"));
+        const str4 = try str3.clone(arena.allocator());
+        try testing.expect(str4.eqlSlice("hello,world"));
+        try testing.expect(str3.slice.ptr != str4.slice.ptr);
+    }
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "zig更好的c💯");
+        try testing.expectEqual(str1.utf8Len(), 8);
+    }
 }
 
 test "concat" {
@@ -519,5 +574,18 @@ test "trim/trimStart/trimEnd" {
         const str4 = try JStringUnmanaged.newFromSlice(arena.allocator(), "  \t  ");
         const str5 = try str4.trimEnd(arena.allocator());
         try testing.expect(str5.eqlSlice(""));
+    }
+}
+
+test "chartAt" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
+    const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "abcdefg");
+    {
+        try testing.expectEqual(str1.charAt(0), error.IndexOutOfBounds);
+        try testing.expectEqual(str2.charAt(0), 'a');
+        try testing.expectEqual(str2.charAt(2), 'c');
+        try testing.expectEqual(str2.charAt(-3), 'e');
     }
 }
