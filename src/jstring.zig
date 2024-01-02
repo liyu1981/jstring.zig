@@ -155,6 +155,31 @@ pub const JStringUnmanaged = struct {
         };
     }
 
+    pub fn newFromTuple(allocator: std.mem.Allocator, rest_items: anytype) anyerror!JStringUnmanaged {
+        const ArgsType = @TypeOf(rest_items);
+        const args_type_info = @typeInfo(ArgsType);
+        if (args_type_info != .Struct) {
+            @compileError("expected tuple or struct argument, found " ++ @typeName(ArgsType));
+        }
+
+        const fields_info = args_type_info.Struct.fields;
+        if (fields_info.len > @typeInfo(u32).Int.bits) {
+            @compileError("32 arguments max are supported per format call");
+        }
+
+        // max 32 arguments, and each of them will not have long (<8) specifier
+        comptime var fmt_buf: [8 * 32]u8 = undefined;
+        _ = &fmt_buf;
+        comptime var fmt_len: usize = 0;
+        comptime {
+            var fmt_print_slice: []u8 = fmt_buf[0..];
+            for (fields_info) |field_info| {
+                _bufPrintFmt(@typeInfo(field_info.type), &fmt_buf, &fmt_len, &fmt_print_slice);
+            }
+        }
+        return JStringUnmanaged.newFromFormat(allocator, fmt_buf[0..fmt_len], rest_items);
+    }
+
     // utils
 
     pub inline fn len(this: *const JStringUnmanaged) usize {
@@ -527,7 +552,13 @@ pub const JStringUnmanaged = struct {
         return this._kmp_indexOf(allocator, needle_slice, pos, true);
     }
 
-    // TODO localeCompare
+    // ** localeCompare
+
+    pub fn localeCompare(this: *const JStringUnmanaged) bool {
+        _ = this;
+        @compileError("Not implemented! Does this method make sense in zig?");
+    }
+
     // TODO match
     // TODO matchAll
 
@@ -551,7 +582,6 @@ pub const JStringUnmanaged = struct {
         }
 
         var wanted_slice = try allocator.alloc(u8, wanted_len);
-        defer allocator.free(wanted_slice);
 
         const wanted_pad_len = wanted_len - this.len();
         const count = @divTrunc(wanted_pad_len, pad_slice.len);
@@ -564,7 +594,9 @@ pub const JStringUnmanaged = struct {
             target_slice = wanted_slice[this.str_slice.len + i * pad_slice.len .. wanted_len - residual_len];
             @memcpy(target_slice, pad_slice);
         }
-        return JStringUnmanaged.newFromSlice(allocator, wanted_slice);
+        return JStringUnmanaged{
+            .str_slice = wanted_slice,
+        };
     }
 
     /// JString version of padEnd, accept pad_string (*const JStringUnmanaged)
@@ -586,7 +618,6 @@ pub const JStringUnmanaged = struct {
         }
 
         var wanted_slice = try allocator.alloc(u8, wanted_len);
-        defer allocator.free(wanted_slice);
 
         const wanted_pad_len = wanted_len - this.len();
         const count = @divTrunc(wanted_pad_len, pad_slice.len);
@@ -600,7 +631,9 @@ pub const JStringUnmanaged = struct {
             @memcpy(target_slice, pad_slice);
         }
 
-        return JStringUnmanaged.newFromSlice(allocator, wanted_slice);
+        return JStringUnmanaged{
+            .str_slice = wanted_slice,
+        };
     }
 
     /// JString version of padStart, accept pad_string (*const JStringUnmanaged)
@@ -624,13 +657,14 @@ pub const JStringUnmanaged = struct {
 
         const new_len = this.len() * count;
         const new_slice = try allocator.alloc(u8, new_len);
-        defer allocator.free(new_slice);
         var target_slice: []u8 = undefined;
         for (0..count) |i| {
             target_slice = new_slice[i * this.len() .. (i + 1) * this.len()];
             @memcpy(target_slice, this.str_slice);
         }
-        return JStringUnmanaged.newFromSlice(allocator, new_slice);
+        return JStringUnmanaged{
+            .str_slice = new_slice,
+        };
     }
 
     // TODO replace
@@ -689,11 +723,72 @@ pub const JStringUnmanaged = struct {
         return std.mem.eql(u8, this.str_slice[0..prefix_slice.len], prefix_slice);
     }
 
-    // TODO toLocaleLowerCase
-    // TODO toLocaleUpperCase
-    // TODO toLowerCase
-    // TODO toUpperCase
-    // TODO toWellFormed
+    // ** toLocaleLowerCase
+
+    pub fn toLocaleLowerCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+        _ = this;
+        _ = allocator;
+        @compileError("TODO, not yet implemented!");
+    }
+
+    // ** toLocaleUpperCase
+
+    pub fn toLocalUpperCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+        _ = this;
+        _ = allocator;
+        @compileError("TODO, not yet implemented!");
+    }
+
+    // ** toLowerCase
+
+    pub fn toLowerCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+        if (this.len() == 0) {
+            return this.clone(allocator);
+        }
+
+        var new_slice = try allocator.alloc(u8, this.str_slice.len);
+        @memcpy(new_slice, this.str_slice);
+        var i: usize = 0;
+        while (i < new_slice.len) {
+            const size = try std.unicode.utf8ByteSequenceLength(new_slice[i]);
+            if (size == 1) {
+                new_slice[i] = std.ascii.toLower(new_slice[i]);
+            }
+            i += size;
+        }
+        return JStringUnmanaged{
+            .str_slice = new_slice,
+        };
+    }
+
+    // ** toUpperCase
+
+    pub fn toUpperCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+        if (this.len() == 0) {
+            return this.clone(allocator);
+        }
+
+        var new_slice = try allocator.alloc(u8, this.str_slice.len);
+        @memcpy(new_slice, this.str_slice);
+        var i: usize = 0;
+        while (i < new_slice.len) {
+            const size = try std.unicode.utf8ByteSequenceLength(new_slice[i]);
+            if (size == 1) {
+                new_slice[i] = std.ascii.toUpper(new_slice[i]);
+            }
+            i += size;
+        }
+        return JStringUnmanaged{
+            .str_slice = new_slice,
+        };
+    }
+
+    // ** toWellFormed
+
+    pub fn toWellFormed(this: *const JStringUnmanaged) void {
+        _ = this;
+        @compileError("toWellFormed does not make sense in zig as zig is u8/utf8 based. No need to use this.");
+    }
 
     // ** trim
 
@@ -868,6 +963,8 @@ test "constructors" {
     try testing.expectEqual(str3.len(), 11);
     const str4 = try JStringUnmanaged.newFromFormat(arena.allocator(), "{s}", .{"jstring"});
     try testing.expectEqual(str4.len(), 7);
+    const str5 = try JStringUnmanaged.newFromTuple(arena.allocator(), .{ "jstring", 5 });
+    try testing.expectEqual(str5.len(), 8);
 }
 
 test "utils" {
@@ -1103,5 +1200,17 @@ test "slice" {
         try testing.expect(str9.eqlSlice("wo"));
         const str10 = try str1.slice(arena.allocator(), 6, -3);
         try testing.expect(str10.eqlSlice("wo"));
+    }
+}
+
+test "toLowerCase/toUpperCase" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hEllO,💯woRld");
+        const str2 = try str1.toUpperCase(arena.allocator());
+        try testing.expect(str2.eqlSlice("HELLO,💯WORLD"));
+        const str3 = try str1.toLowerCase(arena.allocator());
+        try testing.expect(str3.eqlSlice("hello,💯world"));
     }
 }
