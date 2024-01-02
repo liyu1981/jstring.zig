@@ -401,8 +401,18 @@ pub const JStringUnmanaged = struct {
         return std.mem.eql(u8, this.slice[this.slice.len - suffix_slice.len ..], suffix_slice);
     }
 
-    // TODO fromCharCode
-    // TODO fromCodePoint
+    // ** fromCharCode
+
+    pub fn fromCharCode() JStringUnmanaged {
+        @compileError("zig supports utf-8 natively, use newFromSlice instead.");
+    }
+
+    // ** fromCodePoint
+
+    pub fn fromCodePoint() JStringUnmanaged {
+        @compileError("zig supports utf-8 natively, use newFromSlice instead.");
+    }
+
     // TODO includes
     // TODO indexOf
     // TODO isWellFormed
@@ -411,9 +421,84 @@ pub const JStringUnmanaged = struct {
     // TODO match
     // TODO matchAll
     // TODO normalize
-    // TODO padEnd
-    // TODO padStart
-    // TODO raw
+
+    // ** padEnd
+
+    /// The padEnd method creates a new string by padding this string with a
+    /// given slice (repeated, if needed) so that the resulting string reaches
+    /// a given length. The padding is applied from the end of this string. If
+    /// padString is too long to stay within targetLength, it will be truncated
+    /// from the beginning.
+    pub fn padEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) anyerror!JStringUnmanaged {
+        if (this.len >= wanted_len) {
+            return this.clone(allocator);
+        }
+
+        var wanted_slice = try allocator.alloc(u8, wanted_len);
+        defer allocator.free(wanted_slice);
+
+        const wanted_pad_len = wanted_len - this.len;
+        const count = @divTrunc(wanted_pad_len, pad_slice.len);
+        const residual_len = wanted_pad_len % pad_slice.len;
+        var target_slice = wanted_slice[0..this.slice.len];
+        @memcpy(target_slice, this.slice);
+        target_slice = wanted_slice[wanted_len - residual_len ..];
+        @memcpy(target_slice, pad_slice[0..residual_len]);
+        for (0..count) |i| {
+            target_slice = wanted_slice[this.slice.len + i * pad_slice.len .. wanted_len - residual_len];
+            @memcpy(target_slice, pad_slice);
+        }
+        return JStringUnmanaged.newFromSlice(allocator, wanted_slice);
+    }
+
+    /// JString version of padEnd, accept pad_string (*const JStringUnmanaged)
+    /// instead of slice.
+    pub inline fn padEndJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) anyerror!JStringUnmanaged {
+        return this.padEnd(allocator, wanted_len, pad_string.slice);
+    }
+
+    // ** padStart
+
+    /// The padStart() method creates a new string by padding this string with
+    /// another slice (multiple times, if needed) until the resulting string
+    /// reaches the given length. The padding is applied from the start of this
+    /// string. If pad_slice is too long to stay within the wanted_len, it will
+    /// be truncated from the end.
+    pub fn padStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) anyerror!JStringUnmanaged {
+        if (this.len >= wanted_len) {
+            return this.clone(allocator);
+        }
+
+        var wanted_slice = try allocator.alloc(u8, wanted_len);
+        defer allocator.free(wanted_slice);
+
+        const wanted_pad_len = wanted_len - this.len;
+        const count = @divTrunc(wanted_pad_len, pad_slice.len);
+        const residual_len = wanted_pad_len % pad_slice.len;
+        var target_slice = wanted_slice[wanted_pad_len..];
+        @memcpy(target_slice, this.slice);
+        target_slice = wanted_slice[0..residual_len];
+        @memcpy(target_slice, pad_slice[pad_slice.len - residual_len ..]);
+        for (0..count) |i| {
+            target_slice = wanted_slice[residual_len + i * pad_slice.len .. wanted_pad_len];
+            @memcpy(target_slice, pad_slice);
+        }
+
+        return JStringUnmanaged.newFromSlice(allocator, wanted_slice);
+    }
+
+    /// JString version of padStart, accept pad_string (*const JStringUnmanaged)
+    /// instead of slice.
+    pub inline fn padStartJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) anyerror!JStringUnmanaged {
+        return this.padStart(allocator, wanted_len, pad_string.slice);
+    }
+
+    // ** raw
+
+    pub fn raw() JStringUnmanaged {
+        @compileError("zig has no template literals like javascript, use newFromSlice/newFromFormat/newFromTuple instead.");
+    }
+
     // TODO repeat
     // TODO replace
     // TODO search
@@ -724,5 +809,24 @@ test "iterator/reverseIterator/utf8Iterator" {
         var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "zig更好的c💯");
         var it1 = try str1.utf8Iterator();
         try testing.expectEqual(it1.nextCodepoint(), 'z');
+    }
+}
+
+test "padStart/padEnd" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+        const str2 = try str1.padStart(arena.allocator(), 12, "welcome");
+        try testing.expect(str2.eqlSlice("welcomehello"));
+        const str3 = try str1.padStart(arena.allocator(), 15, "welcome");
+        try testing.expect(str3.eqlSlice("omewelcomehello"));
+    }
+    {
+        const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+        const str2 = try str1.padEnd(arena.allocator(), 10, "world");
+        try testing.expect(str2.eqlSlice("helloworld"));
+        const str3 = try str1.padEnd(arena.allocator(), 13, "world");
+        try testing.expect(str3.eqlSlice("helloworldwor"));
     }
 }
