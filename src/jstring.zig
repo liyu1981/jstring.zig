@@ -87,7 +87,7 @@ pub const JStringUnmanaged = struct {
         pos: usize = 0,
 
         pub fn next(this: *Self) ?u8 {
-            if (this.pos >= this.jstring_.*.len) {
+            if (this.pos >= this.jstring_.*.len()) {
                 return null;
             } else {
                 const c = this.jstring_.*.charAt(@as(i32, @intCast(this.pos))) catch return null;
@@ -104,7 +104,7 @@ pub const JStringUnmanaged = struct {
         pos: isize = -1,
 
         pub fn next(this: *Self) ?u8 {
-            if (this.pos < -@as(isize, @intCast(this.jstring_.*.len))) {
+            if (this.pos < -@as(isize, @intCast(this.jstring_.*.len()))) {
                 return null;
             } else {
                 const c = this.jstring_.*.charAt(this.pos) catch return null;
@@ -114,59 +114,58 @@ pub const JStringUnmanaged = struct {
         }
     };
 
-    slice: []const u8,
-    len: usize,
+    str_slice: []const u8,
     utf8_view_inited: bool = false,
     utf8_view: std.unicode.Utf8View = undefined,
     utf8_len: usize = 0,
 
     pub inline fn deinit(this: *const JStringUnmanaged, allocator: std.mem.Allocator) void {
-        allocator.free(this.slice);
+        allocator.free(this.str_slice);
     }
 
     // constructors
 
     pub fn newEmpty(allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
-        const slice = try allocator.alloc(u8, 0);
+        const new_slice = try allocator.alloc(u8, 0);
         return JStringUnmanaged{
-            .slice = slice,
-            .len = 0,
+            .str_slice = new_slice,
         };
     }
 
     pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) anyerror!JStringUnmanaged {
-        const slice = try allocator.alloc(u8, string_slice.len);
-        @memcpy(slice, string_slice);
+        const new_slice = try allocator.alloc(u8, string_slice.len);
+        @memcpy(new_slice, string_slice);
         return JStringUnmanaged{
-            .slice = slice,
-            .len = string_slice.len,
+            .str_slice = new_slice,
         };
     }
 
     pub fn newFromJStringUnmanaged(allocator: std.mem.Allocator, that: JStringUnmanaged) anyerror!JStringUnmanaged {
-        const slice = try allocator.alloc(u8, that.len);
-        @memcpy(slice, that.slice);
+        const new_slice = try allocator.alloc(u8, that.len());
+        @memcpy(new_slice, that.str_slice);
         return JStringUnmanaged{
-            .slice = slice,
-            .len = that.len,
+            .str_slice = new_slice,
         };
     }
 
     pub fn newFromFormat(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) anyerror!JStringUnmanaged {
-        const slice = try std.fmt.allocPrint(allocator, fmt, args);
+        const new_slice = try std.fmt.allocPrint(allocator, fmt, args);
         return JStringUnmanaged{
-            .slice = slice,
-            .len = slice.len,
+            .str_slice = new_slice,
         };
     }
 
     // utils
 
+    pub inline fn len(this: *const JStringUnmanaged) usize {
+        return this.str_slice.len;
+    }
+
     /// First time call utf8Len will init the utf8_view and calculate len once.
     /// After that we will just use the cached view and len.
     pub fn utf8Len(this: *JStringUnmanaged) anyerror!usize {
         if (!this.utf8_view_inited) {
-            this.utf8_view = try std.unicode.Utf8View.init(this.slice);
+            this.utf8_view = try std.unicode.Utf8View.init(this.str_slice);
             this.utf8_view_inited = true;
             this.utf8_len = brk: {
                 var utf8_len: usize = 0;
@@ -185,18 +184,20 @@ pub const JStringUnmanaged = struct {
     }
 
     pub inline fn isEmpty(this: *const JStringUnmanaged) bool {
-        return this.len == 0;
+        return this.len() == 0;
     }
 
     pub inline fn eqlSlice(this: *const JStringUnmanaged, string_slice: []const u8) bool {
-        return std.mem.eql(u8, this.slice, string_slice);
+        return std.mem.eql(u8, this.str_slice, string_slice);
     }
 
     pub inline fn eqlJStringUmanaged(this: *const JStringUnmanaged, that: JStringUnmanaged) bool {
-        return std.mem.eql(u8, this.slice, that.slice);
+        return std.mem.eql(u8, this.str_slice, that.str_slice);
     }
 
     // methods as listed at https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String
+
+    // all methods marked as deprecated (such as anchor, big, blink etc) are omitted.
 
     // ** iterator
 
@@ -263,20 +264,20 @@ pub const JStringUnmanaged = struct {
     /// beginning; when negative is from ending; when index == 0, return the
     /// the first char if not empty.
     pub fn charAt(this: *const JStringUnmanaged, index: isize) anyerror!u8 {
-        if (index >= this.len) {
+        if (index >= this.len()) {
             return error.IndexOutOfBounds;
         }
 
-        if ((-index) > this.len) {
+        if ((-index) > this.len()) {
             return error.IndexOutOfBounds;
         }
 
         if (index >= 0) {
-            return this.slice[@intCast(index)];
+            return this.str_slice[@intCast(index)];
         }
 
         if (index < 0) {
-            return this.slice[this.len - @as(usize, @intCast(-index))];
+            return this.str_slice[this.len() - @as(usize, @intCast(-index))];
         }
 
         unreachable;
@@ -308,24 +309,23 @@ pub const JStringUnmanaged = struct {
             return this.clone(allocator);
         } else {
             var rest_sum_len: usize = 0;
-            const new_len = this.len + lenbrk: {
+            const new_len = this.len() + lenbrk: {
                 for (rest_jstrings) |jstring| {
-                    rest_sum_len += jstring.len;
+                    rest_sum_len += jstring.len();
                 }
                 break :lenbrk rest_sum_len;
             };
 
             const new_slice = try allocator.alloc(u8, new_len);
             var new_slice_ptr = new_slice.ptr;
-            @memcpy(new_slice_ptr, this.slice);
-            new_slice_ptr += this.slice.len;
+            @memcpy(new_slice_ptr, this.str_slice);
+            new_slice_ptr += this.str_slice.len;
             for (rest_jstrings) |jstring| {
-                @memcpy(new_slice_ptr, jstring.slice);
-                new_slice_ptr += jstring.len;
+                @memcpy(new_slice_ptr, jstring.str_slice);
+                new_slice_ptr += jstring.len();
             }
             return JStringUnmanaged{
-                .slice = new_slice,
-                .len = new_len,
+                .str_slice = new_slice,
             };
         }
     }
@@ -391,14 +391,14 @@ pub const JStringUnmanaged = struct {
     // ** endsWith
 
     pub inline fn endsWith(this: *const JStringUnmanaged, suffix: JStringUnmanaged) bool {
-        return this.endsWithSlice(suffix.slice);
+        return this.endsWithSlice(suffix.str_slice);
     }
 
     pub fn endsWithSlice(this: *const JStringUnmanaged, suffix_slice: []const u8) bool {
-        if (this.len < suffix_slice.len) {
+        if (this.len() < suffix_slice.len) {
             return false;
         }
-        return std.mem.eql(u8, this.slice[this.slice.len - suffix_slice.len ..], suffix_slice);
+        return std.mem.eql(u8, this.str_slice[this.str_slice.len - suffix_slice.len ..], suffix_slice);
     }
 
     // ** fromCharCode
@@ -444,14 +444,14 @@ pub const JStringUnmanaged = struct {
     fn _naive_indexOf(this: *const JStringUnmanaged, needle_slice: []const u8, pos: usize, want_last: bool) isize {
         if (needle_slice.len == 0) {
             if (want_last) {
-                return @as(isize, @intCast(this.len - 1));
+                return @as(isize, @intCast(this.len() - 1));
             } else {
                 return @as(isize, @intCast(pos));
             }
         }
 
         var occurence: isize = -1;
-        const haystack_slice = this.slice[pos..];
+        const haystack_slice = this.str_slice[pos..];
         var k: usize = 0;
         while (k < haystack_slice.len - needle_slice.len) : (k += 1) {
             if (std.mem.eql(u8, haystack_slice[k .. k + needle_slice.len], needle_slice)) {
@@ -467,18 +467,18 @@ pub const JStringUnmanaged = struct {
     fn _kmp_indexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize, want_last: bool) anyerror!isize {
         if (needle_slice.len == 0) {
             if (want_last) {
-                return @as(isize, @intCast(this.len - 1));
+                return @as(isize, @intCast(this.len() - 1));
             } else {
                 return @as(isize, @intCast(pos));
             }
         }
 
-        if (pos >= this.len or pos + needle_slice.len > this.len) {
+        if (pos >= this.len() or pos + needle_slice.len > this.len()) {
             return -1;
         }
 
         var occurence: isize = -1;
-        const haystack_slice = this.slice[pos..];
+        const haystack_slice = this.str_slice[pos..];
 
         const t = try _kmp_build_failure_table(allocator, needle_slice);
         defer allocator.free(t);
@@ -546,22 +546,22 @@ pub const JStringUnmanaged = struct {
     /// padString is too long to stay within targetLength, it will be truncated
     /// from the beginning.
     pub fn padEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) anyerror!JStringUnmanaged {
-        if (this.len >= wanted_len) {
+        if (this.len() >= wanted_len) {
             return this.clone(allocator);
         }
 
         var wanted_slice = try allocator.alloc(u8, wanted_len);
         defer allocator.free(wanted_slice);
 
-        const wanted_pad_len = wanted_len - this.len;
+        const wanted_pad_len = wanted_len - this.len();
         const count = @divTrunc(wanted_pad_len, pad_slice.len);
         const residual_len = wanted_pad_len % pad_slice.len;
-        var target_slice = wanted_slice[0..this.slice.len];
-        @memcpy(target_slice, this.slice);
+        var target_slice = wanted_slice[0..this.str_slice.len];
+        @memcpy(target_slice, this.str_slice);
         target_slice = wanted_slice[wanted_len - residual_len ..];
         @memcpy(target_slice, pad_slice[0..residual_len]);
         for (0..count) |i| {
-            target_slice = wanted_slice[this.slice.len + i * pad_slice.len .. wanted_len - residual_len];
+            target_slice = wanted_slice[this.str_slice.len + i * pad_slice.len .. wanted_len - residual_len];
             @memcpy(target_slice, pad_slice);
         }
         return JStringUnmanaged.newFromSlice(allocator, wanted_slice);
@@ -581,18 +581,18 @@ pub const JStringUnmanaged = struct {
     /// string. If pad_slice is too long to stay within the wanted_len, it will
     /// be truncated from the end.
     pub fn padStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) anyerror!JStringUnmanaged {
-        if (this.len >= wanted_len) {
+        if (this.len() >= wanted_len) {
             return this.clone(allocator);
         }
 
         var wanted_slice = try allocator.alloc(u8, wanted_len);
         defer allocator.free(wanted_slice);
 
-        const wanted_pad_len = wanted_len - this.len;
+        const wanted_pad_len = wanted_len - this.len();
         const count = @divTrunc(wanted_pad_len, pad_slice.len);
         const residual_len = wanted_pad_len % pad_slice.len;
         var target_slice = wanted_slice[wanted_pad_len..];
-        @memcpy(target_slice, this.slice);
+        @memcpy(target_slice, this.str_slice);
         target_slice = wanted_slice[0..residual_len];
         @memcpy(target_slice, pad_slice[pad_slice.len - residual_len ..]);
         for (0..count) |i| {
@@ -622,33 +622,71 @@ pub const JStringUnmanaged = struct {
             return JStringUnmanaged.newEmpty(allocator);
         }
 
-        const new_len = this.len * count;
+        const new_len = this.len() * count;
         const new_slice = try allocator.alloc(u8, new_len);
         defer allocator.free(new_slice);
         var target_slice: []u8 = undefined;
         for (0..count) |i| {
-            target_slice = new_slice[i * this.len .. (i + 1) * this.len];
-            @memcpy(target_slice, this.slice);
+            target_slice = new_slice[i * this.len() .. (i + 1) * this.len()];
+            @memcpy(target_slice, this.str_slice);
         }
         return JStringUnmanaged.newFromSlice(allocator, new_slice);
     }
 
     // TODO replace
     // TODO search
-    // TODO slice
+
+    // ** slice
+
+    pub fn slice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: isize, index_end: isize) anyerror!JStringUnmanaged {
+        const uindex_start = brk: {
+            if (index_start >= 0) {
+                break :brk @as(usize, @intCast(index_start));
+            } else {
+                if (@as(usize, @intCast(-index_start)) > this.len()) {
+                    return error.IndexOutOfBounds;
+                }
+                break :brk this.len() - @as(usize, @intCast(-index_start));
+            }
+        };
+        const uindex_end = brk: {
+            if (index_end >= 0) {
+                break :brk @as(usize, @intCast(index_end));
+            } else {
+                if (@as(usize, @intCast(-index_end)) > this.len()) {
+                    return error.IndexOutOfBounds;
+                }
+                break :brk this.len() - @as(usize, @intCast(-index_end));
+            }
+        };
+        return this._slice(allocator, uindex_start, uindex_end);
+    }
+
+    pub inline fn sliceWithStartOnly(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: isize) anyerror!JStringUnmanaged {
+        return this.slice(allocator, index_start, @as(isize, @intCast(this.len())));
+    }
+
+    fn _slice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: usize, index_end: usize) anyerror!JStringUnmanaged {
+        if (index_start >= index_end or index_start >= this.len()) {
+            return JStringUnmanaged.newEmpty(allocator);
+        }
+        const valid_index_end = if (index_end > this.len()) this.len() else index_end;
+        return JStringUnmanaged.newFromSlice(allocator, this.str_slice[index_start..valid_index_end]);
+    }
+
     // TODO split
 
     // ** startsWith
 
     pub inline fn startsWith(this: *const JStringUnmanaged, prefix: JStringUnmanaged) bool {
-        return this.startsWithSlice(prefix.slice);
+        return this.startsWithSlice(prefix.str_slice);
     }
 
     pub fn startsWithSlice(this: *const JStringUnmanaged, prefix_slice: []const u8) bool {
-        if (this.len < prefix_slice.len) {
+        if (this.len() < prefix_slice.len) {
             return false;
         }
-        return std.mem.eql(u8, this.slice[0..prefix_slice.len], prefix_slice);
+        return std.mem.eql(u8, this.str_slice[0..prefix_slice.len], prefix_slice);
     }
 
     // TODO toLocaleLowerCase
@@ -663,7 +701,7 @@ pub const JStringUnmanaged = struct {
     /// are deinited.
     pub fn trim(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         const str1 = try this.trimStart(allocator);
-        if (str1.len == 0) {
+        if (str1.len() == 0) {
             return str1;
         }
         const str2 = try str1.trimEnd(allocator);
@@ -677,9 +715,9 @@ pub const JStringUnmanaged = struct {
     /// nothing to trim it will return a clone of original string.
     pub fn trimEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         const first_nonblank = brk: {
-            var i = this.slice.len - 1;
+            var i = this.str_slice.len - 1;
             while (i >= 0) {
-                switch (this.slice[i]) {
+                switch (this.str_slice[i]) {
                     ' ', '\t', '\n', '\r' => {
                         if (i > 0) {
                             i -= 1;
@@ -693,12 +731,12 @@ pub const JStringUnmanaged = struct {
             }
             break :brk 0;
         };
-        if (first_nonblank == this.slice.len - 1) {
+        if (first_nonblank == this.str_slice.len - 1) {
             return this.clone(allocator);
         } else if (first_nonblank == 0) {
             return JStringUnmanaged.newEmpty(allocator);
         } else {
-            const new_slice = this.slice[0 .. first_nonblank + 1];
+            const new_slice = this.str_slice[0 .. first_nonblank + 1];
             return JStringUnmanaged.newFromSlice(allocator, new_slice);
         }
     }
@@ -709,23 +747,27 @@ pub const JStringUnmanaged = struct {
     /// nothing to trim it will return a clone of original string.
     pub fn trimStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         const first_nonblank = brk: {
-            for (this.slice, 0..) |char, i| {
+            for (this.str_slice, 0..) |char, i| {
                 switch (char) {
                     ' ', '\t', '\n', '\r' => continue,
                     else => break :brk i,
                 }
             }
-            break :brk this.slice.len;
+            break :brk this.len();
         };
         if (first_nonblank == 0) {
             return this.clone(allocator);
         } else {
-            const new_slice = this.slice[first_nonblank..];
+            const new_slice = this.str_slice[first_nonblank..];
             return JStringUnmanaged.newFromSlice(allocator, new_slice);
         }
     }
 
-    // TODO valueOf
+    // ** valueOf
+
+    pub inline fn valueOf(this: *const JStringUnmanaged) []u8 {
+        return this.str_slice;
+    }
 };
 
 // >>> internal functions
@@ -819,13 +861,13 @@ test "constructors" {
     var arena = JStringArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
-    try testing.expectEqual(str1.len, 0);
+    try testing.expectEqual(str1.len(), 0);
     const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
-    try testing.expectEqual(str2.len, 11);
+    try testing.expectEqual(str2.len(), 11);
     const str3 = try JStringUnmanaged.newFromJStringUnmanaged(arena.allocator(), str2);
-    try testing.expectEqual(str3.len, 11);
+    try testing.expectEqual(str3.len(), 11);
     const str4 = try JStringUnmanaged.newFromFormat(arena.allocator(), "{s}", .{"jstring"});
-    try testing.expectEqual(str4.len, 7);
+    try testing.expectEqual(str4.len(), 7);
 }
 
 test "utils" {
@@ -841,7 +883,7 @@ test "utils" {
         try testing.expect(str3.eqlSlice("hello,world"));
         const str4 = try str3.clone(arena.allocator());
         try testing.expect(str4.eqlSlice("hello,world"));
-        try testing.expect(str3.slice.ptr != str4.slice.ptr);
+        try testing.expect(str3.str_slice.ptr != str4.str_slice.ptr);
     }
     {
         var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "zig更好的c💯");
@@ -863,7 +905,7 @@ test "concat" {
     try testing.expect(str3.eqlSlice("hello,world" ** 4));
     const str4 = try str1.concat(arena.allocator(), str_array_buf[0..0]);
     try testing.expect(str4.eqlSlice("hello,world"));
-    try testing.expect(str4.slice.ptr != str1.slice.ptr);
+    try testing.expect(str4.str_slice.ptr != str1.str_slice.ptr);
     const str5 = try str1.concatFormat(arena.allocator(), "{s}", .{" jstring"});
     try testing.expect(str5.eqlSlice("hello,world jstring"));
     const optional_6: ?i32 = 6;
@@ -1031,5 +1073,35 @@ test "repeat" {
         try testing.expect(str2.eqlSlice("hellohello"));
         const str3 = try str1.repeat(arena.allocator(), 0);
         try testing.expect(str3.eqlSlice(""));
+    }
+}
+
+test "slice" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
+        const str2 = try str1.sliceWithStartOnly(arena.allocator(), 0);
+        try testing.expect(str2.eqlSlice("hello,world"));
+        const str3 = try str1.sliceWithStartOnly(arena.allocator(), 6);
+        try testing.expect(str3.eqlSlice("world"));
+        const str4 = try str1.sliceWithStartOnly(arena.allocator(), -5);
+        try testing.expect(str4.eqlSlice("world"));
+        const str5 = try str1.sliceWithStartOnly(arena.allocator(), -11);
+        try testing.expect(str5.eqlSlice("hello,world"));
+        var r = str1.sliceWithStartOnly(arena.allocator(), -15);
+        try testing.expectEqual(r, error.IndexOutOfBounds);
+        r = str1.slice(arena.allocator(), 0, -15);
+        try testing.expectEqual(r, error.IndexOutOfBounds);
+        const str6 = try str1.slice(arena.allocator(), 15, 7);
+        try testing.expect(str6.eqlSlice(""));
+        const str7 = try str1.slice(arena.allocator(), 8, 7);
+        try testing.expect(str7.eqlSlice(""));
+        const str8 = try str1.slice(arena.allocator(), 6, 15);
+        try testing.expect(str8.eqlSlice("world"));
+        const str9 = try str1.slice(arena.allocator(), 6, 8);
+        try testing.expect(str9.eqlSlice("wo"));
+        const str10 = try str1.slice(arena.allocator(), 6, -3);
+        try testing.expect(str10.eqlSlice("wo"));
     }
 }
