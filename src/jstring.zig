@@ -76,6 +76,44 @@ pub const JStringArenaAllocator = struct {
 };
 
 pub const JStringUnmanaged = struct {
+    const JStringUnmanagedError = error{
+        UnicodeDecodeError,
+    };
+
+    pub const U8Iterator = struct {
+        const Self = @This();
+
+        jstring_: *const JStringUnmanaged = undefined,
+        pos: usize = 0,
+
+        pub fn next(this: *Self) ?u8 {
+            if (this.pos >= this.jstring_.*.len) {
+                return null;
+            } else {
+                const c = this.jstring_.*.charAt(@as(i32, @intCast(this.pos))) catch return null;
+                this.pos += 1;
+                return c;
+            }
+        }
+    };
+
+    pub const U8ReverseIterator = struct {
+        const Self = @This();
+
+        jstring_: *const JStringUnmanaged = undefined,
+        pos: isize = -1,
+
+        pub fn next(this: *Self) ?u8 {
+            if (this.pos < -@as(isize, @intCast(this.jstring_.*.len))) {
+                return null;
+            } else {
+                const c = this.jstring_.*.charAt(this.pos) catch return null;
+                this.pos -= 1;
+                return c;
+            }
+        }
+    };
+
     slice: []const u8,
     len: usize,
     utf8_view_inited: bool = false,
@@ -160,9 +198,63 @@ pub const JStringUnmanaged = struct {
 
     // methods as listed at https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String
 
-    // TODO iterator
+    // ** iterator
 
-    // TODO at
+    /// return an iterator can iterate char(u8) by char, from the beginning.
+    pub inline fn iterator(this: *const JStringUnmanaged) U8Iterator {
+        return U8Iterator{
+            .jstring_ = this,
+            .pos = 0,
+        };
+    }
+
+    /// return an interator can iterate char(u8) by char, but from the end.
+    pub inline fn reverseIterator(this: *const JStringUnmanaged) U8ReverseIterator {
+        return U8ReverseIterator{
+            .jstring_ = this,
+            .pos = -1,
+        };
+    }
+
+    /// return std.unicode.Utf8Iterator, which can help to iterate through every
+    /// unicode char
+    pub inline fn utf8Iterator(this: *JStringUnmanaged) anyerror!std.unicode.Utf8Iterator {
+        _ = try this.utf8Len();
+        return this.utf8_view.iterator();
+    }
+
+    // ** at
+
+    /// different to Javascript's string.at, return unicode char(u21) of index,
+    /// as prefer utf-8 string. Same to Javascript, accept index as i32: when
+    /// postive is from beginning; when negative is from ending; when
+    /// index == 0, return the the first char if not empty.
+    pub fn at(this: *JStringUnmanaged, index: i32) anyerror!u21 {
+        const utf8_len = try this.utf8Len();
+        if (index >= utf8_len) {
+            return error.IndexOutOfBounds;
+        }
+
+        if ((-index) > utf8_len) {
+            return error.IndexOutOfBounds;
+        }
+
+        const char_pos: usize = if (index >= 0) @intCast(index) else (utf8_len - @as(usize, @intCast(-index)));
+
+        var it = this.utf8_view.iterator();
+        var unicode_char: u21 = undefined;
+        for (0..utf8_len) |i| {
+            if (it.nextCodepoint()) |uc| {
+                unicode_char = uc;
+            } else {
+                return JStringUnmanagedError.UnicodeDecodeError;
+            }
+            if (i >= char_pos) {
+                break;
+            }
+        }
+        return unicode_char;
+    }
 
     // ** charAt
 
@@ -170,12 +262,12 @@ pub const JStringUnmanaged = struct {
     /// string. Same to Javascript, accept index as i32: when postive is from
     /// beginning; when negative is from ending; when index == 0, return the
     /// the first char if not empty.
-    pub fn charAt(this: *const JStringUnmanaged, index: i32) anyerror!u8 {
+    pub fn charAt(this: *const JStringUnmanaged, index: isize) anyerror!u8 {
         if (index >= this.len) {
             return error.IndexOutOfBounds;
         }
 
-        if ((-index) >= this.len) {
+        if ((-index) > this.len) {
             return error.IndexOutOfBounds;
         }
 
@@ -577,15 +669,47 @@ test "trim/trimStart/trimEnd" {
     }
 }
 
-test "chartAt" {
+test "chartAt/at" {
     var arena = JStringArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
-    const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "abcdefg");
     {
+        const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
+        const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "abcdefg");
         try testing.expectEqual(str1.charAt(0), error.IndexOutOfBounds);
         try testing.expectEqual(str2.charAt(0), 'a');
         try testing.expectEqual(str2.charAt(2), 'c');
         try testing.expectEqual(str2.charAt(-3), 'e');
+        try testing.expectEqual(str2.charAt(-7), 'a');
+    }
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "zig更好的c💯");
+        try testing.expectEqual(str1.at(0), 'z');
+        try testing.expectEqual(str1.at(3), '更');
+        try testing.expectEqual(str1.at(-1), '💯');
+        try testing.expectEqual(str1.at(-8), 'z');
+    }
+}
+
+test "iterator/reverseIterator/utf8Iterator" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
+        const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "ab");
+        var it1 = str1.iterator();
+        try testing.expectEqual(it1.next(), null);
+        var it2 = str2.iterator();
+        try testing.expectEqual(it2.next(), 'a');
+        try testing.expectEqual(it2.next(), 'b');
+        try testing.expectEqual(it2.next(), null);
+        var it3 = str2.reverseIterator();
+        try testing.expectEqual(it3.next(), 'b');
+        try testing.expectEqual(it3.next(), 'a');
+        try testing.expectEqual(it3.next(), null);
+    }
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "zig更好的c💯");
+        var it1 = try str1.utf8Iterator();
+        try testing.expectEqual(it1.nextCodepoint(), 'z');
     }
 }
