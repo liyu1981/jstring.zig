@@ -413,14 +413,130 @@ pub const JStringUnmanaged = struct {
         @compileError("zig supports utf-8 natively, use newFromSlice instead.");
     }
 
-    // TODO includes
-    // TODO indexOf
-    // TODO isWellFormed
-    // TODO lastIndexOf
+    // ** includes
+
+    pub inline fn includes(this: *const JStringUnmanaged, needle_slice: []const u8, pos: usize) bool {
+        return this._naive_indexOf(needle_slice, pos, false) >= 0;
+    }
+
+    pub inline fn fastIncludes(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize) bool {
+        const i = this._kmp_indexOf(allocator, needle_slice, pos, false) catch unreachable;
+        return i >= 0;
+    }
+
+    // ** indexOf
+
+    /// The indexOf() method searches this string and returns the index of the
+    /// first occurrence of the specified substring. It takes an starting
+    /// position and returns the first occurrence of the specified substring at
+    /// an index greater than or equal to the specified number.
+    pub inline fn indexOf(this: *const JStringUnmanaged, needle_slice: []const u8, pos: usize) isize {
+        return this._naive_indexOf(needle_slice, pos, false);
+    }
+
+    /// Fast version of indexOf as it uses KMP algorithm for searching. Will
+    /// result in O(this.len+needle_slice.len) but also requires allocator for
+    /// creating KMP lookup table.
+    pub inline fn fastIndexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize) anyerror!isize {
+        return this._kmp_indexOf(allocator, needle_slice, pos, false);
+    }
+
+    fn _naive_indexOf(this: *const JStringUnmanaged, needle_slice: []const u8, pos: usize, want_last: bool) isize {
+        if (needle_slice.len == 0) {
+            if (want_last) {
+                return @as(isize, @intCast(this.len - 1));
+            } else {
+                return @as(isize, @intCast(pos));
+            }
+        }
+
+        var occurence: isize = -1;
+        const haystack_slice = this.slice[pos..];
+        var k: usize = 0;
+        while (k < haystack_slice.len - needle_slice.len) : (k += 1) {
+            if (std.mem.eql(u8, haystack_slice[k .. k + needle_slice.len], needle_slice)) {
+                occurence = @as(isize, @intCast(k));
+                if (!want_last) {
+                    return if (occurence > 0) @as(isize, @intCast(pos)) + occurence else occurence;
+                }
+            } else continue;
+        }
+        return if (occurence > 0) @as(isize, @intCast(pos)) + occurence else occurence;
+    }
+
+    fn _kmp_indexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize, want_last: bool) anyerror!isize {
+        if (needle_slice.len == 0) {
+            if (want_last) {
+                return @as(isize, @intCast(this.len - 1));
+            } else {
+                return @as(isize, @intCast(pos));
+            }
+        }
+
+        if (pos >= this.len or pos + needle_slice.len > this.len) {
+            return -1;
+        }
+
+        var occurence: isize = -1;
+        const haystack_slice = this.slice[pos..];
+
+        const t = try _kmp_build_failure_table(allocator, needle_slice);
+        defer allocator.free(t);
+
+        var j: isize = 0;
+        for (0..haystack_slice.len) |i| {
+            if (_slice_at(u8, haystack_slice, @as(isize, @intCast(i))) == _slice_at(u8, needle_slice, j)) {
+                j += 1;
+                if (j >= needle_slice.len) {
+                    occurence = @as(isize, @intCast(i)) - j + 1;
+                    if (!want_last) {
+                        return if (occurence >= 0) @as(isize, @intCast(pos)) + occurence else occurence;
+                    }
+                    j = _slice_at(isize, t, j);
+                }
+            } else if (j > 0) {
+                j = _slice_at(isize, t, j);
+            }
+        }
+
+        return if (occurence >= 0) @as(isize, @intCast(pos)) + occurence else occurence;
+    }
+
+    // ** isWellFormed
+
+    /// similar to definition in javascript, but with difference that we are
+    /// checking utf8.
+    pub fn isWellFormed(this: *const JStringUnmanaged) bool {
+        switch (this.utf8Len()) {
+            .Error => return false,
+            else => return true,
+        }
+    }
+
+    // ** lastIndexOf
+
+    /// The lastIndexOf() method searches this string and returns the index of
+    /// the last occurrence of the specified substring. It takes an optional
+    /// starting position and returns the last occurrence of the specified
+    /// substring at an index less than or equal to the specified number.
+    pub inline fn lastIndexOf(this: *const JStringUnmanaged, needle_slice: []const u8, pos: usize) isize {
+        return this._naive_indexOf(needle_slice, pos, true);
+    }
+
+    pub inline fn fastLastIndexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize) anyerror!isize {
+        return this._kmp_indexOf(allocator, needle_slice, pos, true);
+    }
+
     // TODO localeCompare
     // TODO match
     // TODO matchAll
-    // TODO normalize
+
+    // ** normalize
+
+    pub fn normalize(this: *const JStringUnmanaged) JStringUnmanaged {
+        _ = this;
+        @compileError("Oops, normalize function is not supported!");
+    }
 
     // ** padEnd
 
@@ -499,7 +615,24 @@ pub const JStringUnmanaged = struct {
         @compileError("zig has no template literals like javascript, use newFromSlice/newFromFormat/newFromTuple instead.");
     }
 
-    // TODO repeat
+    // ** repeat
+
+    pub fn repeat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, count: usize) anyerror!JStringUnmanaged {
+        if (count == 0) {
+            return JStringUnmanaged.newEmpty(allocator);
+        }
+
+        const new_len = this.len * count;
+        const new_slice = try allocator.alloc(u8, new_len);
+        defer allocator.free(new_slice);
+        var target_slice: []u8 = undefined;
+        for (0..count) |i| {
+            target_slice = new_slice[i * this.len .. (i + 1) * this.len];
+            @memcpy(target_slice, this.slice);
+        }
+        return JStringUnmanaged.newFromSlice(allocator, new_slice);
+    }
+
     // TODO replace
     // TODO search
     // TODO slice
@@ -647,6 +780,33 @@ fn _bufPrintSpecifier(comptime type_info: std.builtin.Type, comptime fmt_buf: []
             fmt_print_slice_.* = fmt_buf[fmt_len_.*..];
         },
     }
+}
+
+/// very unsafe, you have been warned to know what you are doing
+fn _slice_at(comptime T: type, haystack: []const T, index: isize) T {
+    if (index >= 0) {
+        return haystack[@as(usize, @intCast(index))];
+    } else {
+        return haystack[@as(usize, @intCast(@as(isize, @intCast(haystack.len)) + index))];
+    }
+}
+
+fn _kmp_build_failure_table(allocator: std.mem.Allocator, needle_slice: []const u8) anyerror![]isize {
+    const t = try allocator.alloc(isize, (needle_slice.len + 1));
+    @memset(t, 0);
+
+    var j: isize = 0;
+    for (1..needle_slice.len) |i| {
+        j = _slice_at(isize, t, @as(isize, @intCast(i)));
+        while (j > 0 and _slice_at(u8, needle_slice, @as(isize, @intCast(i))) != _slice_at(u8, needle_slice, j)) {
+            j = _slice_at(isize, t, j);
+        }
+        if (j > 0 or _slice_at(u8, needle_slice, @as(isize, @intCast(i))) == _slice_at(u8, needle_slice, j)) {
+            t[i + 1] = j + 1;
+        }
+    }
+
+    return t;
 }
 
 fn _test_return_error_union(value_or_error: bool, value: i32, err: anyerror) !i32 {
@@ -828,5 +988,48 @@ test "padStart/padEnd" {
         try testing.expect(str2.eqlSlice("helloworld"));
         const str3 = try str1.padEnd(arena.allocator(), 13, "world");
         try testing.expect(str3.eqlSlice("helloworldwor"));
+    }
+}
+
+test "indexOf/lastIndexOf/includes" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,worldhello,world");
+        try testing.expectEqual(str1.indexOf("hello", 0), 0);
+        try testing.expectEqual(str1.lastIndexOf("hello", 0), 11);
+        try testing.expectEqual(str1.indexOf("hello", 6), 11);
+        try testing.expectEqual(str1.indexOf("nothere", 0), -1);
+        try testing.expectEqual(str1.indexOf("", 0), 0);
+        try testing.expectEqual(str1.indexOf("", 6), 6);
+        try testing.expectEqual(str1.lastIndexOf("", 0), 21);
+        try testing.expectEqual(str1.lastIndexOf("", 6), 21);
+        try testing.expect(str1.includes("hello", 0));
+        try testing.expect(!str1.includes("nothere", 0));
+    }
+    {
+        const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,worldhello,world");
+        try testing.expectEqual(str2.fastIndexOf(arena.allocator(), "hello", 0), 0);
+        try testing.expectEqual(str2.fastLastIndexOf(arena.allocator(), "hello", 0), 11);
+        try testing.expectEqual(str2.fastIndexOf(arena.allocator(), "hello", 6), 11);
+        try testing.expectEqual(str2.fastIndexOf(arena.allocator(), "nothere", 0), -1);
+        try testing.expectEqual(str2.fastIndexOf(arena.allocator(), "", 0), 0);
+        try testing.expectEqual(str2.fastIndexOf(arena.allocator(), "", 6), 6);
+        try testing.expectEqual(str2.fastLastIndexOf(arena.allocator(), "", 0), 21);
+        try testing.expectEqual(str2.fastLastIndexOf(arena.allocator(), "", 6), 21);
+        try testing.expect(str2.fastIncludes(arena.allocator(), "hello", 0));
+        try testing.expect(!str2.fastIncludes(arena.allocator(), "nothere", 0));
+    }
+}
+
+test "repeat" {
+    var arena = JStringArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+        const str2 = try str1.repeat(arena.allocator(), 2);
+        try testing.expect(str2.eqlSlice("hellohello"));
+        const str3 = try str1.repeat(arena.allocator(), 0);
+        try testing.expect(str3.eqlSlice(""));
     }
 }
