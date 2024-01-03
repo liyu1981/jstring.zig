@@ -170,14 +170,24 @@ pub const ArenaAllocator = struct {
         return true;
     }
 
-    fn createNode(self: *ArenaAllocator, prev_len: usize, minimum_size: usize) ?*BufNode {
+    inline fn curAllocBuf(cur_node: *BufNode) []u8 {
+        return @as([*]u8, @ptrCast(cur_node))[0..cur_node.data];
+    }
+
+    inline fn curBuf(cur_alloc_buf: []u8) []u8 {
+        return cur_alloc_buf[@sizeOf(BufNode)..];
+    }
+
+    inline fn actualMinSize(minimum_size: usize) usize {
         // seems each node is layed out as
         //    |BufNode struct| data buf (minimum_size)|
-        const actual_min_size = minimum_size + @sizeOf(BufNode);
-        // const actual_min_size = minimum_size + (@sizeOf(BufNode) + 16);
-        const big_enough_len = prev_len + actual_min_size;
-        const len = big_enough_len;
-        // const len = big_enough_len + big_enough_len / 2;
+        // so calculate size
+        return minimum_size + @sizeOf(BufNode);
+    }
+
+    fn createNode(self: *ArenaAllocator, prev_len: usize, minimum_size: usize) ?*BufNode {
+        const actual_min_size = actualMinSize(minimum_size);
+        const len = prev_len + actual_min_size;
         const log2_align = comptime std.math.log2_int(usize, @alignOf(BufNode));
         const ptr = self.child_allocator.rawAlloc(len, log2_align, @returnAddress()) orelse
             return null;
@@ -198,8 +208,17 @@ pub const ArenaAllocator = struct {
         else
             (self.createNode(0, n + ptr_align) orelse return null);
         while (true) {
-            const cur_alloc_buf = @as([*]u8, @ptrCast(cur_node))[0..cur_node.data];
-            const cur_buf = cur_alloc_buf[@sizeOf(BufNode)..];
+            const cur_alloc_buf = curAllocBuf(cur_node);
+            const cur_buf = curBuf(cur_alloc_buf);
+
+            // find new_end_index as follows
+            //    Memory Layout
+            //    |--------------------|-----------------------|------------------->
+            //    ^cur ptr+end_index   ^cur ptr_aligned addr   ^next ptr+end_index (+n)
+            //         ^addr            ^adjusted_addr
+            //         ^----------------^
+            //          ^delta
+            //          so: new_end_index = end_index + delta
             const addr = @intFromPtr(cur_buf.ptr) + self.state.end_index;
             const adjusted_addr = std.mem.alignForward(usize, addr, ptr_align);
             const adjusted_index = self.state.end_index + (adjusted_addr - addr);
@@ -211,7 +230,7 @@ pub const ArenaAllocator = struct {
                 return result.ptr;
             }
 
-            const bigger_buf_size = @sizeOf(BufNode) + new_end_index; // no more 16 bytes?
+            const bigger_buf_size = actualMinSize(new_end_index);
             const log2_align = comptime std.math.log2_int(usize, @alignOf(BufNode));
             if (self.child_allocator.rawResize(cur_alloc_buf, log2_align, bigger_buf_size, @returnAddress())) {
                 cur_node.data = bigger_buf_size;
@@ -228,11 +247,10 @@ pub const ArenaAllocator = struct {
         _ = ret_addr;
 
         const cur_node = self.state.buffer_list.first orelse return false;
-        const cur_buf = @as([*]u8, @ptrCast(cur_node))[@sizeOf(BufNode)..cur_node.data];
+        const cur_buf = curBuf(curAllocBuf(cur_node));
         if (@intFromPtr(cur_buf.ptr) + self.state.end_index != @intFromPtr(buf.ptr) + buf.len) {
-            // It's not the most recent allocation, so it cannot be expanded,
-            // but it's fine if they want to make it smaller.
-            return new_len <= buf.len;
+            // It's not the most recent allocation, so it cannot be expanded or shrinked
+            return false;
         }
 
         if (buf.len >= new_len) {
@@ -241,9 +259,9 @@ pub const ArenaAllocator = struct {
         } else if (cur_buf.len - self.state.end_index >= new_len - buf.len) {
             self.state.end_index += new_len - buf.len;
             return true;
-        } else {
-            return false;
         }
+
+        return false;
     }
 
     fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
@@ -251,8 +269,9 @@ pub const ArenaAllocator = struct {
         _ = ret_addr;
         const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
         const cur_node = self.state.buffer_list.first orelse return;
-        const cur_buf = @as([*]u8, @ptrCast(cur_node))[@sizeOf(BufNode)..cur_node.data];
+        const cur_buf = curBuf(curAllocBuf(cur_node));
         if (@intFromPtr(cur_buf.ptr) + self.state.end_index == @intFromPtr(buf.ptr) + buf.len) {
+            // It is the most recent allocation...just shirnk the end_index?
             self.state.end_index -= buf.len;
         }
     }
@@ -401,6 +420,64 @@ pub const JStringUnmanaged = struct {
 
     pub inline fn eqlJStringUmanaged(this: *const JStringUnmanaged, that: JStringUnmanaged) bool {
         return std.mem.eql(u8, this.str_slice, that.str_slice);
+    }
+
+    pub fn explod(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
+        const real_limit = brk: {
+            if (limit < 0) {
+                break :brk this.str_slice.len;
+            } else {
+                break :brk @as(usize, @intCast(limit));
+            }
+        };
+        return this._explod(allocator, real_limit);
+    }
+
+    fn _explod(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: usize) anyerror![]JStringUnmanaged {
+        var result_jstrings = try allocator.alloc(JStringUnmanaged, limit);
+        var result_count: usize = 0;
+        var pos: usize = 0;
+        var next_pos: usize = 0;
+
+        while (pos < this.str_slice.len) {
+            switch (this.str_slice[pos]) {
+                ' ', '\t', '\n', '\r' => {
+                    pos += 1;
+                    continue;
+                },
+                else => {
+                    next_pos = pos + 1;
+                    next_pos = brk: {
+                        while (next_pos < this.str_slice.len) : (next_pos += 1) {
+                            switch (this.str_slice[next_pos]) {
+                                ' ', '\t', '\n', '\r' => break :brk next_pos,
+                                else => continue,
+                            }
+                        }
+                        break :brk next_pos;
+                    };
+                    result_jstrings[result_count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[pos..next_pos]);
+                    result_count += 1;
+                    if (result_count >= limit) {
+                        break;
+                    }
+                    pos = next_pos;
+                    continue;
+                },
+            }
+        }
+
+        if (result_count == limit) {
+            return result_jstrings;
+        } else {
+            defer allocator.free(result_jstrings);
+            var final_result_jstrings = try allocator.alloc(JStringUnmanaged, result_count);
+            _ = &final_result_jstrings;
+            if (result_count > 0) {
+                @memcpy(final_result_jstrings, result_jstrings[0..result_count]);
+            }
+            return final_result_jstrings;
+        }
     }
 
     // methods as listed at https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String
@@ -893,22 +970,103 @@ pub const JStringUnmanaged = struct {
 
     // ** split
 
-    pub fn split(this: *const JStringUnmanaged, allocator: std.mem.Allocator, seperator: []const u8, limit: isize) anyerror![]JStringUnmanaged {
-        var real_limit = brk: {
+    /// pay attention that this function will not consider spaces in non-ascii.
+    fn _splitToUtf8Chars(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: usize) anyerror![]JStringUnmanaged {
+        var result_jstrings = try allocator.alloc(JStringUnmanaged, limit);
+        var result_count: usize = 0;
+        if (limit == 0) {
+            return result_jstrings;
+        }
+
+        _ = try this.utf8Len(); // force for a utf8_view
+        var it = try this.utf8Iterator();
+        while (it.nextCodepoint()) |code_point| {
+            switch (code_point) {
+                ' ', '\t', '\n', '\r' => continue,
+                else => {
+                    result_jstrings[result_count] = try JStringUnmanaged.newFromFormat(allocator, "{u}", .{code_point});
+                    result_count += 1;
+                    if (result_count >= limit) {
+                        break;
+                    }
+                },
+            }
+        }
+
+        if (result_count == limit) {
+            return result_jstrings;
+        } else {
+            defer allocator.free(result_jstrings);
+            var final_result_jstrings = try allocator.alloc(JStringUnmanaged, result_count);
+            _ = &final_result_jstrings;
+            if (result_count > 0) {
+                @memcpy(final_result_jstrings, result_jstrings[0..result_count]);
+            }
+            return final_result_jstrings;
+        }
+    }
+
+    pub fn split(this: *JStringUnmanaged, allocator: std.mem.Allocator, seperator: []const u8, limit: isize) anyerror![]JStringUnmanaged {
+        const real_limit = brk: {
             if (limit < 0) {
-                break :brk std.math.maxInt(usize);
+                break :brk this.str_slice.len;
             } else {
                 break :brk @as(usize, @intCast(limit));
             }
         };
-        _ = &real_limit;
-        _ = this;
-        _ = allocator;
-        _ = seperator;
-        unreachable;
+
+        if (seperator.len == 0) {
+            // Well this is quite stupid, but let us still try to cover it.
+            // Essentially it creates a string for each char (utf8) and remove
+            // all spaces
+            return this._splitToUtf8Chars(allocator, real_limit);
+        }
+
+        var result_jstrings = try allocator.alloc(JStringUnmanaged, real_limit);
+        var result_count: usize = 0;
+        var search_start: usize = 0;
+        var pos: isize = -1;
+        while (search_start < this.str_slice.len) {
+            pos = this.indexOf(seperator, search_start);
+            if (pos < 0) {
+                if (result_count > 0) {
+                    // have found one, the what's left is rest part
+                    result_jstrings[result_count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[search_start..]);
+                    result_count += 1;
+                }
+                break;
+            } else {
+                result_jstrings[result_count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[search_start..@as(usize, @intCast(pos))]);
+                result_count += 1;
+                if (result_count >= real_limit) {
+                    break;
+                }
+                search_start = @as(usize, @intCast(pos)) + seperator.len;
+                continue;
+            }
+        }
+
+        if (result_count == real_limit) {
+            // save the copy as all buf filled
+            return result_jstrings;
+        } else {
+            defer allocator.free(result_jstrings);
+            var final_result_jstrings = try allocator.alloc(JStringUnmanaged, result_count);
+            _ = &final_result_jstrings;
+            if (result_count > 0) {
+                @memcpy(final_result_jstrings, result_jstrings[0..result_count]);
+            }
+            return final_result_jstrings;
+        }
     }
 
-    pub fn splitByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, regex: anytype, limit: isize) anyerror![]JStringUnmanaged {
+    /// Split by ascii whitespaces (" \t\n\r"), or called explod in languages
+    /// like PHP
+    pub inline fn splitByWhiteSpace(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
+        return this.explod(allocator, limit);
+    }
+
+    pub fn splitByRegex(this: *JStringUnmanaged, allocator: std.mem.Allocator, regex: anytype, limit: isize) anyerror![]JStringUnmanaged {
         _ = this;
         _ = allocator;
         _ = regex;
@@ -1156,7 +1314,7 @@ fn _test_return_error_union(value_or_error: bool, value: i32, err: anyerror) !i3
     return if (value_or_error) value else err;
 }
 
-// >>> all your tests belong to me and list in belowing <<<
+// >>> all your tests belong to me and list in below <<<
 
 test "ArenaAllocator (reset with preheating)" {
     var arena_allocator = ArenaAllocator.init(std.testing.allocator);
@@ -1188,16 +1346,13 @@ test "ArenaAllocator (reset while retaining a buffer)" {
     const a = arena_allocator.allocator();
 
     // Create two internal buffers
-
     _ = try a.alloc(u8, 1);
     _ = try a.alloc(u8, 1000);
 
     // Check that we have at least two buffers
-
     try std.testing.expect(arena_allocator.state.buffer_list.first.?.next != null);
 
     // This retains the first allocated buffer
-
     try std.testing.expect(arena_allocator.reset(.{ .retain_with_limit = 1 }));
 }
 
@@ -1234,6 +1389,15 @@ test "utils" {
     {
         var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "zig更好的c💯");
         try testing.expectEqual(str1.utf8Len(), 8);
+    }
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), " zig 更好 \t 的c\t💯");
+        const strings1 = try str1.explod(arena.allocator(), -1);
+        try testing.expectEqual(strings1.len, 4);
+        const strings2 = try str1.explod(arena.allocator(), 2);
+        try testing.expectEqual(strings2.len, 2);
+        try testing.expect(strings2[0].eqlSlice("zig"));
+        try testing.expect(strings2[1].eqlSlice("更好"));
     }
 }
 
@@ -1461,5 +1625,26 @@ test "toLowerCase/toUpperCase" {
         try testing.expect(str2.eqlSlice("HELLO,💯WORLD"));
         const str3 = try str1.toLowerCase(arena.allocator());
         try testing.expect(str3.eqlSlice("hello,💯world"));
+    }
+}
+
+test "split" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,💯world");
+        var strings1 = try str1.split(arena.allocator(), ",", -1);
+        try testing.expectEqual(strings1.len, 2);
+        try testing.expect(strings1[0].eqlSlice("hello"));
+        try testing.expect(strings1[1].eqlSlice("💯world"));
+        var strings2 = try str1.split(arena.allocator(), ",", 1);
+        try testing.expectEqual(strings2.len, 1);
+        try testing.expect(strings2[0].eqlSlice("hello"));
+        var str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "\thello 💯 world ");
+        var strings3 = try str2.split(arena.allocator(), "", -1);
+        try testing.expectEqual(strings3.len, 11);
+        try testing.expect(strings3[0].eqlSlice("h"));
+        try testing.expect(strings3[5].eqlSlice("💯"));
+        try testing.expect(strings3[10].eqlSlice("d"));
     }
 }
