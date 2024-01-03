@@ -174,11 +174,11 @@ pub const JStringUnmanaged = struct {
         return this.eqlSlice(that.str_slice);
     }
 
-    /// explod this string to small strings sperated by ascii spaces while
+    /// explode this string to small strings sperated by ascii spaces while
     /// respects utf8 chars. Limit can be -1 or positive numbers. When limit is
     /// negative means auto calculate how many strings can return; otherwise
     /// will return min(limit, possible max number of strings)
-    pub fn explod(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
+    pub fn explode(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
         const real_limit = brk: {
             if (limit < 0) {
                 break :brk this.str_slice.len;
@@ -186,10 +186,10 @@ pub const JStringUnmanaged = struct {
                 break :brk @as(usize, @intCast(limit));
             }
         };
-        return this._explod(allocator, real_limit);
+        return this._explode(allocator, real_limit);
     }
 
-    fn _explod(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: usize) anyerror![]JStringUnmanaged {
+    fn _explode(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: usize) anyerror![]JStringUnmanaged {
         var result_jstrings = try allocator.alloc(JStringUnmanaged, limit);
         var result_count: usize = 0;
         var pos: usize = 0;
@@ -830,10 +830,10 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    /// Split by ascii whitespaces (" \t\n\r"), or called explod in languages
+    /// Split by ascii whitespaces (" \t\n\r"), or called explode in languages
     /// like PHP
     pub inline fn splitByWhiteSpace(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
-        return this.explod(allocator, limit);
+        return this.explode(allocator, limit);
     }
 
     pub fn splitByRegex(this: *JStringUnmanaged, allocator: std.mem.Allocator, regex: anytype, limit: isize) anyerror![]JStringUnmanaged {
@@ -1558,9 +1558,9 @@ test "utils" {
     }
     {
         var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), " zig 更好 \t 的c\t💯");
-        const strings1 = try str1.explod(arena.allocator(), -1);
+        const strings1 = try str1.explode(arena.allocator(), -1);
         try testing.expectEqual(strings1.len, 4);
-        const strings2 = try str1.explod(arena.allocator(), 2);
+        const strings2 = try str1.explode(arena.allocator(), 2);
         try testing.expectEqual(strings2.len, 2);
         try testing.expect(strings2[0].eqlSlice("zig"));
         try testing.expect(strings2[1].eqlSlice("更好"));
