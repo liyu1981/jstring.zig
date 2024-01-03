@@ -1,372 +1,14 @@
 const std = @import("std");
 const testing = std.testing;
-const pcre = @import("pcre_binding.zig");
 
-/// A copy of zig's std.heap.ArenaAllocator for possibility to optimise for
-/// string usage.
-/// This allocator takes an existing allocator, wraps it, and provides an
-/// interface where you can allocate without freeing, and then free it all
-/// together.
-pub const ArenaAllocator = struct {
-    child_allocator: std.mem.Allocator,
-    state: State,
+const enable_arena_allocator: bool = true;
+const enable_pcre: bool = true;
 
-    /// Inner state of ArenaAllocator. Can be stored rather than the entire ArenaAllocator
-    /// as a memory-saving optimization.
-    pub const State = struct {
-        buffer_list: std.SinglyLinkedList(usize) = .{},
-        end_index: usize = 0, // the next addr to write in cur_buf
+const pcre = if (enable_pcre) @import("pcre_binding.zig") else undefined;
 
-        pub fn promote(self: State, child_allocator: std.mem.Allocator) ArenaAllocator {
-            return .{
-                .child_allocator = child_allocator,
-                .state = self,
-            };
-        }
-    };
+pub const ArenaAllocator = defineArenaAllocator(enable_arena_allocator);
 
-    pub fn allocator(self: *ArenaAllocator) std.mem.Allocator {
-        return .{
-            .ptr = self,
-            .vtable = &.{
-                .alloc = alloc,
-                .resize = resize,
-                .free = free,
-            },
-        };
-    }
-
-    const BufNode = std.SinglyLinkedList(usize).Node;
-
-    pub fn init(child_allocator: std.mem.Allocator) ArenaAllocator {
-        return (State{}).promote(child_allocator);
-    }
-
-    pub fn deinit(self: ArenaAllocator) void {
-        // NOTE: When changing this, make sure `reset()` is adjusted accordingly!
-        var it = self.state.buffer_list.first;
-        while (it) |node| {
-            // this has to occur before the free because the free frees node
-            const next_it = node.next;
-            const align_bits = std.math.log2_int(usize, @alignOf(BufNode));
-            const alloc_buf = @as([*]u8, @ptrCast(node))[0..node.data];
-            self.child_allocator.rawFree(alloc_buf, align_bits, @returnAddress());
-            it = next_it;
-        }
-    }
-
-    pub const ResetMode = union(enum) {
-        /// Releases all allocated memory in the arena.
-        free_all,
-        /// This will pre-heat the arena for future allocations by allocating a
-        /// large enough buffer for all previously done allocations.
-        /// Preheating will speed up the allocation process by invoking the
-        /// backing allocator less often than before. If `reset()` is used in a
-        /// loop, this means that after the biggest operation, no memory
-        /// allocations are performed anymore.
-        retain_capacity,
-        /// This is the same as `retain_capacity`, but the memory will be shrunk
-        /// to this value if it exceeds the limit.
-        retain_with_limit: usize,
-    };
-
-    /// Queries the current memory use of this arena.
-    /// This will **not** include the storage required for internal keeping.
-    pub fn queryCapacity(self: ArenaAllocator) usize {
-        var size: usize = 0;
-        var it = self.state.buffer_list.first;
-        while (it) |node| : (it = node.next) {
-            // Compute the actually allocated size excluding the
-            // linked list node.
-            size += node.data - @sizeOf(BufNode);
-        }
-        return size;
-    }
-
-    /// Resets the arena allocator and frees all allocated memory.
-    ///
-    /// `mode` defines how the currently allocated memory is handled.
-    /// See the variant documentation for `ResetMode` for the effects of each mode.
-    ///
-    /// The function will return whether the reset operation was successful or not.
-    /// If the reallocation  failed `false` is returned. The arena will still be fully
-    /// functional in that case, all memory is released. Future allocations just might
-    /// be slower.
-    ///
-    /// NOTE: If `mode` is `free_all`, the function will always return `true`.
-    pub fn reset(self: *ArenaAllocator, mode: ResetMode) bool {
-        // Some words on the implementation:
-        // The reset function can be implemented with two basic approaches:
-        // - Counting how much bytes were allocated since the last reset, and storing that
-        //   information in State. This will make reset fast and alloc only a teeny tiny bit
-        //   slower.
-
-        // - Counting how much bytes were allocated by iterating the chunk linked list. This
-        //   will make reset slower, but alloc() keeps the same speed when reset() as if reset()
-        //   would not exist.
-        //
-
-        // The second variant was chosen for implementation, as with more and more calls to reset(),
-        // the function will get faster and faster. At one point, the complexity of the function
-        // will drop to amortized O(1), as we're only ever having a single chunk that will not be
-        // reallocated, and we're not even touching the backing allocator anymore.
-        //
-
-        // Thus, only the first hand full of calls to reset() will actually need to iterate the linked
-        // list, all future calls are just taking the first node, and only resetting the `end_index`
-        // value.
-
-        const requested_capacity = switch (mode) {
-            .retain_capacity => self.queryCapacity(),
-            .retain_with_limit => |limit| @min(limit, self.queryCapacity()),
-            .free_all => 0,
-        };
-
-        if (requested_capacity == 0) {
-            // just reset when we don't have anything to reallocate
-            self.deinit();
-            self.state = State{};
-            return true;
-        }
-
-        const total_size = requested_capacity + @sizeOf(BufNode);
-        const align_bits = std.math.log2_int(usize, @alignOf(BufNode));
-        // Free all nodes except for the last one
-
-        var it = self.state.buffer_list.first;
-        const maybe_first_node = while (it) |node| {
-            // this has to occur before the free because the free frees node
-            const next_it = node.next;
-            if (next_it == null)
-                break node;
-            const alloc_buf = @as([*]u8, @ptrCast(node))[0..node.data];
-            self.child_allocator.rawFree(alloc_buf, align_bits, @returnAddress());
-            it = next_it;
-        } else null;
-        std.debug.assert(maybe_first_node == null or maybe_first_node.?.next == null);
-        // reset the state before we try resizing the buffers, so we definitely have reset the arena to 0.
-
-        self.state.end_index = 0;
-        if (maybe_first_node) |first_node| {
-            self.state.buffer_list.first = first_node;
-            // perfect, no need to invoke the child_allocator
-            if (first_node.data == total_size)
-                return true;
-            const first_alloc_buf = @as([*]u8, @ptrCast(first_node))[0..first_node.data];
-            if (self.child_allocator.rawResize(first_alloc_buf, align_bits, total_size, @returnAddress())) {
-                // successful resize
-                first_node.data = total_size;
-            } else {
-                // manual realloc
-                const new_ptr = self.child_allocator.rawAlloc(total_size, align_bits, @returnAddress()) orelse {
-                    // we failed to preheat the arena properly, signal this to the user.
-                    return false;
-                };
-                self.child_allocator.rawFree(first_alloc_buf, align_bits, @returnAddress());
-                const node: *BufNode = @ptrCast(@alignCast(new_ptr));
-                node.* = .{ .data = total_size };
-                self.state.buffer_list.first = node;
-            }
-        }
-        return true;
-    }
-
-    inline fn curAllocBuf(cur_node: *BufNode) []u8 {
-        return @as([*]u8, @ptrCast(cur_node))[0..cur_node.data];
-    }
-
-    inline fn curBuf(cur_alloc_buf: []u8) []u8 {
-        return cur_alloc_buf[@sizeOf(BufNode)..];
-    }
-
-    inline fn actualMinSize(minimum_size: usize) usize {
-        // seems each node is layed out as
-        //    |BufNode struct| data buf (minimum_size)|
-        // so calculate size
-        return minimum_size + @sizeOf(BufNode);
-    }
-
-    fn createNode(self: *ArenaAllocator, prev_len: usize, minimum_size: usize) ?*BufNode {
-        const actual_min_size = actualMinSize(minimum_size);
-        const len = prev_len + actual_min_size;
-        const log2_align = comptime std.math.log2_int(usize, @alignOf(BufNode));
-        const ptr = self.child_allocator.rawAlloc(len, log2_align, @returnAddress()) orelse
-            return null;
-        const buf_node: *BufNode = @ptrCast(@alignCast(ptr));
-        buf_node.* = .{ .data = len };
-        self.state.buffer_list.prepend(buf_node);
-        self.state.end_index = 0;
-        return buf_node;
-    }
-
-    fn alloc(ctx: *anyopaque, n: usize, log2_ptr_align: u8, ra: usize) ?[*]u8 {
-        const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
-        _ = ra;
-
-        const ptr_align = @as(usize, 1) << @as(std.mem.Allocator.Log2Align, @intCast(log2_ptr_align));
-        var cur_node = if (self.state.buffer_list.first) |first_node|
-            first_node
-        else
-            (self.createNode(0, n + ptr_align) orelse return null);
-        while (true) {
-            const cur_alloc_buf = curAllocBuf(cur_node);
-            const cur_buf = curBuf(cur_alloc_buf);
-
-            // find new_end_index as follows
-            //    Memory Layout
-            //    |--------------------|-----------------------|------------------->
-            //    ^cur ptr+end_index   ^cur ptr_aligned addr   ^next ptr+end_index (+n)
-            //         ^addr            ^adjusted_addr
-            //         ^----------------^
-            //          ^delta
-            //          so: new_end_index = end_index + delta
-            const addr = @intFromPtr(cur_buf.ptr) + self.state.end_index;
-            const adjusted_addr = std.mem.alignForward(usize, addr, ptr_align);
-            const adjusted_index = self.state.end_index + (adjusted_addr - addr);
-            const new_end_index = adjusted_index + n;
-
-            if (new_end_index <= cur_buf.len) {
-                const result = cur_buf[adjusted_index..new_end_index];
-                self.state.end_index = new_end_index;
-                return result.ptr;
-            }
-
-            const bigger_buf_size = actualMinSize(new_end_index);
-            const log2_align = comptime std.math.log2_int(usize, @alignOf(BufNode));
-            if (self.child_allocator.rawResize(cur_alloc_buf, log2_align, bigger_buf_size, @returnAddress())) {
-                cur_node.data = bigger_buf_size;
-            } else {
-                // Allocate a new node if that's not possible
-                cur_node = self.createNode(cur_buf.len, n + ptr_align) orelse return null;
-            }
-        }
-    }
-
-    fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
-        const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
-        _ = log2_buf_align;
-        _ = ret_addr;
-
-        const cur_node = self.state.buffer_list.first orelse return false;
-        const cur_buf = curBuf(curAllocBuf(cur_node));
-        if (@intFromPtr(cur_buf.ptr) + self.state.end_index != @intFromPtr(buf.ptr) + buf.len) {
-            // It's not the most recent allocation, so it cannot be expanded or shrinked
-            return false;
-        }
-
-        if (buf.len >= new_len) {
-            self.state.end_index -= buf.len - new_len;
-            return true;
-        } else if (cur_buf.len - self.state.end_index >= new_len - buf.len) {
-            self.state.end_index += new_len - buf.len;
-            return true;
-        }
-
-        return false;
-    }
-
-    fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
-        _ = log2_buf_align;
-        _ = ret_addr;
-        const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
-        const cur_node = self.state.buffer_list.first orelse return;
-        const cur_buf = curBuf(curAllocBuf(cur_node));
-        if (@intFromPtr(cur_buf.ptr) + self.state.end_index == @intFromPtr(buf.ptr) + buf.len) {
-            // It is the most recent allocation...just shirnk the end_index?
-            self.state.end_index -= buf.len;
-        }
-    }
-};
-
-pub const RegexUnmanaged = struct {
-    context_: *pcre.RegexContext = undefined,
-
-    pub inline fn succeed(this: *const RegexUnmanaged) bool {
-        // PCRE error code 100 == success
-        return this.context_.error_number == 100;
-    }
-
-    pub inline fn errorNumber(this: *const RegexUnmanaged) usize {
-        return @as(usize, @intCast(this.context_.error_number));
-    }
-
-    pub inline fn errorOffset(this: *const RegexUnmanaged) usize {
-        return this.context_.error_offset;
-    }
-
-    pub inline fn errorMessage(this: *const RegexUnmanaged) []const u8 {
-        return this.context_.error_message[0..this.context_.error_message_len];
-    }
-
-    pub inline fn getResults(this: *const RegexUnmanaged) ?[]pcre.RegexMatchResult {
-        if (this.context_.matched_count > 0) {
-            const c = @as(usize, @intCast(this.context_.matched_count));
-            return this.context_.matched_results[0..c];
-        } else return null;
-    }
-
-    pub inline fn getNamedGroupResults(this: *const RegexUnmanaged) []pcre.RegexNamedGroupResult {
-        if (this.context_.named_group_count > 0) {
-            const c = @as(usize, @intCast(this.context_.named_group_count));
-            return this.context_.matched_group_results[0..c];
-        } else return null;
-    }
-
-    pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
-        var context_ = try allocator.create(pcre.RegexContext);
-        context_.regex_options = regex_options;
-        context_.match_options = match_options;
-        const result = pcre.compile(context_, pattern[0..].ptr);
-        if (result == 0) {
-            pcre.get_last_error_message(context_);
-        } else {
-            var mgrs = try allocator.alloc(pcre.RegexNamedGroupResult, context_.named_group_count);
-            context_.matched_group_results = mgrs[0..].ptr;
-        }
-        return RegexUnmanaged{
-            .context_ = context_,
-        };
-    }
-
-    pub fn deinit(this: *RegexUnmanaged, allocator: std.mem.Allocator) void {
-        defer allocator.destroy(this.context_);
-        pcre.free_context(this.context_);
-        allocator.free(this.context_.matched_results);
-        for (this.context_.matched_group_results) |matched_group_result| {
-            allocator.free(matched_group_result.name);
-        }
-        allocator.free(this.context_.matched_group_results);
-    }
-
-    pub fn match(this: *RegexUnmanaged, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
-        this.context_.match_options &= match_options;
-        const m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset_pos);
-        if (m > 0) {
-            if (fetch_results) {
-                try this.fetchResults(allocator);
-            }
-        }
-    }
-
-    pub fn fetchResults(this: *RegexUnmanaged, allocator: std.mem.Allocator) anyerror!void {
-        if (this.context_.matched_count > 0) {
-            // will only fetch when matched_count > 0, so this is ... relatively ... safe :)
-            const matched_count = @as(usize, @intCast(this.context_.matched_count));
-            const mrs = try allocator.alloc(pcre.RegexMatchResult, matched_count);
-            this.context_.matched_results = mrs.ptr;
-            pcre.prepare_named_groups(this.context_);
-            if (this.context_.named_group_count > 0) {
-                const named_group_count = @as(usize, @intCast(this.context_.named_group_count));
-                for (0..named_group_count) |i| {
-                    const name_len = this.context_.matched_group_results[i].name_len;
-                    const name_slice = try allocator.alloc(u8, name_len);
-                    this.context_.matched_group_results[i].name = name_slice.ptr;
-                }
-            }
-            pcre.fetch_match_results(this.context_);
-        }
-    }
-};
+pub const RegexUnmanaged = defineRegexUnmanaged(enable_pcre);
 
 pub const JStringUnmanaged = struct {
     const JStringUnmanagedError = error{
@@ -1358,6 +1000,398 @@ pub const JStringUnmanaged = struct {
     }
 };
 
+// optional components
+
+fn defineArenaAllocator(comptime enable: bool) type {
+    if (enable) {
+        // A copy of zig's std.heap.ArenaAllocator for possibility to optimise for
+        // string usage.
+        // This allocator takes an existing allocator, wraps it, and provides an
+        // interface where you can allocate without freeing, and then free it all
+        // together.
+        return struct {
+            const Self = @This();
+
+            child_allocator: std.mem.Allocator,
+            state: State,
+
+            /// Inner state of ArenaAllocator. Can be stored rather than the entire ArenaAllocator
+            /// as a memory-saving optimization.
+            pub const State = struct {
+                buffer_list: std.SinglyLinkedList(usize) = .{},
+                end_index: usize = 0, // the next addr to write in cur_buf
+
+                pub fn promote(self: State, child_allocator: std.mem.Allocator) Self {
+                    return .{
+                        .child_allocator = child_allocator,
+                        .state = self,
+                    };
+                }
+            };
+
+            pub fn allocator(self: *ArenaAllocator) std.mem.Allocator {
+                return .{
+                    .ptr = self,
+                    .vtable = &.{
+                        .alloc = alloc,
+                        .resize = resize,
+                        .free = free,
+                    },
+                };
+            }
+
+            const BufNode = std.SinglyLinkedList(usize).Node;
+
+            pub fn init(child_allocator: std.mem.Allocator) ArenaAllocator {
+                return (State{}).promote(child_allocator);
+            }
+
+            pub fn deinit(self: ArenaAllocator) void {
+                // NOTE: When changing this, make sure `reset()` is adjusted accordingly!
+                var it = self.state.buffer_list.first;
+                while (it) |node| {
+                    // this has to occur before the free because the free frees node
+                    const next_it = node.next;
+                    const align_bits = std.math.log2_int(usize, @alignOf(BufNode));
+                    const alloc_buf = @as([*]u8, @ptrCast(node))[0..node.data];
+                    self.child_allocator.rawFree(alloc_buf, align_bits, @returnAddress());
+                    it = next_it;
+                }
+            }
+
+            pub const ResetMode = union(enum) {
+                /// Releases all allocated memory in the arena.
+                free_all,
+                /// This will pre-heat the arena for future allocations by allocating a
+                /// large enough buffer for all previously done allocations.
+                /// Preheating will speed up the allocation process by invoking the
+                /// backing allocator less often than before. If `reset()` is used in a
+                /// loop, this means that after the biggest operation, no memory
+                /// allocations are performed anymore.
+                retain_capacity,
+                /// This is the same as `retain_capacity`, but the memory will be shrunk
+                /// to this value if it exceeds the limit.
+                retain_with_limit: usize,
+            };
+
+            /// Queries the current memory use of this arena.
+            /// This will **not** include the storage required for internal keeping.
+            pub fn queryCapacity(self: ArenaAllocator) usize {
+                var size: usize = 0;
+                var it = self.state.buffer_list.first;
+                while (it) |node| : (it = node.next) {
+                    // Compute the actually allocated size excluding the
+                    // linked list node.
+                    size += node.data - @sizeOf(BufNode);
+                }
+                return size;
+            }
+
+            /// Resets the arena allocator and frees all allocated memory.
+            ///
+            /// `mode` defines how the currently allocated memory is handled.
+            /// See the variant documentation for `ResetMode` for the effects of each mode.
+            ///
+            /// The function will return whether the reset operation was successful or not.
+            /// If the reallocation  failed `false` is returned. The arena will still be fully
+            /// functional in that case, all memory is released. Future allocations just might
+            /// be slower.
+            ///
+            /// NOTE: If `mode` is `free_all`, the function will always return `true`.
+            pub fn reset(self: *ArenaAllocator, mode: ResetMode) bool {
+                // Some words on the implementation:
+                // The reset function can be implemented with two basic approaches:
+                // - Counting how much bytes were allocated since the last reset, and storing that
+                //   information in State. This will make reset fast and alloc only a teeny tiny bit
+                //   slower.
+
+                // - Counting how much bytes were allocated by iterating the chunk linked list. This
+                //   will make reset slower, but alloc() keeps the same speed when reset() as if reset()
+                //   would not exist.
+                //
+
+                // The second variant was chosen for implementation, as with more and more calls to reset(),
+                // the function will get faster and faster. At one point, the complexity of the function
+                // will drop to amortized O(1), as we're only ever having a single chunk that will not be
+                // reallocated, and we're not even touching the backing allocator anymore.
+                //
+
+                // Thus, only the first hand full of calls to reset() will actually need to iterate the linked
+                // list, all future calls are just taking the first node, and only resetting the `end_index`
+                // value.
+
+                const requested_capacity = switch (mode) {
+                    .retain_capacity => self.queryCapacity(),
+                    .retain_with_limit => |limit| @min(limit, self.queryCapacity()),
+                    .free_all => 0,
+                };
+
+                if (requested_capacity == 0) {
+                    // just reset when we don't have anything to reallocate
+                    self.deinit();
+                    self.state = State{};
+                    return true;
+                }
+
+                const total_size = requested_capacity + @sizeOf(BufNode);
+                const align_bits = std.math.log2_int(usize, @alignOf(BufNode));
+                // Free all nodes except for the last one
+
+                var it = self.state.buffer_list.first;
+                const maybe_first_node = while (it) |node| {
+                    // this has to occur before the free because the free frees node
+                    const next_it = node.next;
+                    if (next_it == null)
+                        break node;
+                    const alloc_buf = @as([*]u8, @ptrCast(node))[0..node.data];
+                    self.child_allocator.rawFree(alloc_buf, align_bits, @returnAddress());
+                    it = next_it;
+                } else null;
+                std.debug.assert(maybe_first_node == null or maybe_first_node.?.next == null);
+                // reset the state before we try resizing the buffers, so we definitely have reset the arena to 0.
+
+                self.state.end_index = 0;
+                if (maybe_first_node) |first_node| {
+                    self.state.buffer_list.first = first_node;
+                    // perfect, no need to invoke the child_allocator
+                    if (first_node.data == total_size)
+                        return true;
+                    const first_alloc_buf = @as([*]u8, @ptrCast(first_node))[0..first_node.data];
+                    if (self.child_allocator.rawResize(first_alloc_buf, align_bits, total_size, @returnAddress())) {
+                        // successful resize
+                        first_node.data = total_size;
+                    } else {
+                        // manual realloc
+                        const new_ptr = self.child_allocator.rawAlloc(total_size, align_bits, @returnAddress()) orelse {
+                            // we failed to preheat the arena properly, signal this to the user.
+                            return false;
+                        };
+                        self.child_allocator.rawFree(first_alloc_buf, align_bits, @returnAddress());
+                        const node: *BufNode = @ptrCast(@alignCast(new_ptr));
+                        node.* = .{ .data = total_size };
+                        self.state.buffer_list.first = node;
+                    }
+                }
+                return true;
+            }
+
+            inline fn curAllocBuf(cur_node: *BufNode) []u8 {
+                return @as([*]u8, @ptrCast(cur_node))[0..cur_node.data];
+            }
+
+            inline fn curBuf(cur_alloc_buf: []u8) []u8 {
+                return cur_alloc_buf[@sizeOf(BufNode)..];
+            }
+
+            inline fn actualMinSize(minimum_size: usize) usize {
+                // seems each node is layed out as
+                //    |BufNode struct| data buf (minimum_size)|
+                // so calculate size
+                return minimum_size + @sizeOf(BufNode);
+            }
+
+            fn createNode(self: *ArenaAllocator, prev_len: usize, minimum_size: usize) ?*BufNode {
+                const actual_min_size = actualMinSize(minimum_size);
+                const len = prev_len + actual_min_size;
+                const log2_align = comptime std.math.log2_int(usize, @alignOf(BufNode));
+                const ptr = self.child_allocator.rawAlloc(len, log2_align, @returnAddress()) orelse
+                    return null;
+                const buf_node: *BufNode = @ptrCast(@alignCast(ptr));
+                buf_node.* = .{ .data = len };
+                self.state.buffer_list.prepend(buf_node);
+                self.state.end_index = 0;
+                return buf_node;
+            }
+
+            fn alloc(ctx: *anyopaque, n: usize, log2_ptr_align: u8, ra: usize) ?[*]u8 {
+                const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
+                _ = ra;
+
+                const ptr_align = @as(usize, 1) << @as(std.mem.Allocator.Log2Align, @intCast(log2_ptr_align));
+                var cur_node = if (self.state.buffer_list.first) |first_node|
+                    first_node
+                else
+                    (self.createNode(0, n + ptr_align) orelse return null);
+                while (true) {
+                    const cur_alloc_buf = curAllocBuf(cur_node);
+                    const cur_buf = curBuf(cur_alloc_buf);
+
+                    // find new_end_index as follows
+                    //    Memory Layout
+                    //    |--------------------|-----------------------|------------------->
+                    //    ^cur ptr+end_index   ^cur ptr_aligned addr   ^next ptr+end_index (+n)
+                    //         ^addr            ^adjusted_addr
+                    //         ^----------------^
+                    //          ^delta
+                    //          so: new_end_index = end_index + delta
+                    const addr = @intFromPtr(cur_buf.ptr) + self.state.end_index;
+                    const adjusted_addr = std.mem.alignForward(usize, addr, ptr_align);
+                    const adjusted_index = self.state.end_index + (adjusted_addr - addr);
+                    const new_end_index = adjusted_index + n;
+
+                    if (new_end_index <= cur_buf.len) {
+                        const result = cur_buf[adjusted_index..new_end_index];
+                        self.state.end_index = new_end_index;
+                        return result.ptr;
+                    }
+
+                    const bigger_buf_size = actualMinSize(new_end_index);
+                    const log2_align = comptime std.math.log2_int(usize, @alignOf(BufNode));
+                    if (self.child_allocator.rawResize(cur_alloc_buf, log2_align, bigger_buf_size, @returnAddress())) {
+                        cur_node.data = bigger_buf_size;
+                    } else {
+                        // Allocate a new node if that's not possible
+                        cur_node = self.createNode(cur_buf.len, n + ptr_align) orelse return null;
+                    }
+                }
+            }
+
+            fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
+                const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
+                _ = log2_buf_align;
+                _ = ret_addr;
+
+                const cur_node = self.state.buffer_list.first orelse return false;
+                const cur_buf = curBuf(curAllocBuf(cur_node));
+                if (@intFromPtr(cur_buf.ptr) + self.state.end_index != @intFromPtr(buf.ptr) + buf.len) {
+                    // It's not the most recent allocation, so it cannot be expanded or shrinked
+                    return false;
+                }
+
+                if (buf.len >= new_len) {
+                    self.state.end_index -= buf.len - new_len;
+                    return true;
+                } else if (cur_buf.len - self.state.end_index >= new_len - buf.len) {
+                    self.state.end_index += new_len - buf.len;
+                    return true;
+                }
+
+                return false;
+            }
+
+            fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
+                _ = log2_buf_align;
+                _ = ret_addr;
+                const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
+                const cur_node = self.state.buffer_list.first orelse return;
+                const cur_buf = curBuf(curAllocBuf(cur_node));
+                if (@intFromPtr(cur_buf.ptr) + self.state.end_index == @intFromPtr(buf.ptr) + buf.len) {
+                    // It is the most recent allocation...just shirnk the end_index?
+                    self.state.end_index -= buf.len;
+                }
+            }
+        };
+    } else {
+        return struct {
+            pub fn init() void {
+                @compileError("disabled by comptime var `enable_arena_allocator`, set it true to enable.");
+            }
+        };
+    }
+}
+
+fn defineRegexUnmanaged(comptime with_pcre: bool) type {
+    if (with_pcre) {
+        return struct {
+            const Self = @This();
+
+            context_: *pcre.RegexContext = undefined,
+
+            pub inline fn succeed(this: *const Self) bool {
+                // PCRE error code 100 == success
+                return this.context_.error_number == 100;
+            }
+
+            pub inline fn errorNumber(this: *const Self) usize {
+                return @as(usize, @intCast(this.context_.error_number));
+            }
+
+            pub inline fn errorOffset(this: *const Self) usize {
+                return this.context_.error_offset;
+            }
+
+            pub inline fn errorMessage(this: *const Self) []const u8 {
+                return this.context_.error_message[0..this.context_.error_message_len];
+            }
+
+            pub inline fn getResults(this: *const Self) ?[]pcre.RegexMatchResult {
+                if (this.context_.matched_count > 0) {
+                    const c = @as(usize, @intCast(this.context_.matched_count));
+                    return this.context_.matched_results[0..c];
+                } else return null;
+            }
+
+            pub inline fn getNamedGroupResults(this: *const Self) []pcre.RegexNamedGroupResult {
+                if (this.context_.named_group_count > 0) {
+                    const c = @as(usize, @intCast(this.context_.named_group_count));
+                    return this.context_.matched_group_results[0..c];
+                } else return null;
+            }
+
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+                var context_ = try allocator.create(pcre.RegexContext);
+                context_.regex_options = regex_options;
+                context_.match_options = match_options;
+                const result = pcre.compile(context_, pattern[0..].ptr);
+                if (result == 0) {
+                    pcre.get_last_error_message(context_);
+                } else {
+                    var mgrs = try allocator.alloc(pcre.RegexNamedGroupResult, context_.named_group_count);
+                    context_.matched_group_results = mgrs[0..].ptr;
+                }
+                return Self{
+                    .context_ = context_,
+                };
+            }
+
+            pub fn deinit(this: *Self, allocator: std.mem.Allocator) void {
+                defer allocator.destroy(this.context_);
+                pcre.free_context(this.context_);
+                allocator.free(this.context_.matched_results);
+                for (this.context_.matched_group_results) |matched_group_result| {
+                    allocator.free(matched_group_result.name);
+                }
+                allocator.free(this.context_.matched_group_results);
+            }
+
+            pub fn match(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
+                this.context_.match_options &= match_options;
+                const m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset_pos);
+                if (m > 0) {
+                    if (fetch_results) {
+                        try this.fetchResults(allocator);
+                    }
+                }
+            }
+
+            pub fn fetchResults(this: *Self, allocator: std.mem.Allocator) anyerror!void {
+                if (this.context_.matched_count > 0) {
+                    // will only fetch when matched_count > 0, so this is ... relatively ... safe :)
+                    const matched_count = @as(usize, @intCast(this.context_.matched_count));
+                    const mrs = try allocator.alloc(pcre.RegexMatchResult, matched_count);
+                    this.context_.matched_results = mrs.ptr;
+                    pcre.prepare_named_groups(this.context_);
+                    if (this.context_.named_group_count > 0) {
+                        const named_group_count = @as(usize, @intCast(this.context_.named_group_count));
+                        for (0..named_group_count) |i| {
+                            const name_len = this.context_.matched_group_results[i].name_len;
+                            const name_slice = try allocator.alloc(u8, name_len);
+                            this.context_.matched_group_results[i].name = name_slice.ptr;
+                        }
+                    }
+                    pcre.fetch_match_results(this.context_);
+                }
+            }
+        };
+    } else {
+        return struct {
+            pub fn init() void {
+                @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+            }
+        };
+    }
+}
+
 // >>> internal functions
 
 fn _bufPrintFmt(comptime type_info: std.builtin.Type, comptime fmt_buf: []u8, comptime fmt_len_: *usize, comptime fmt_print_slice_: *[]u8) void {
@@ -1445,44 +1479,47 @@ fn _test_return_error_union(value_or_error: bool, value: i32, err: anyerror) !i3
 
 // >>> all your tests belong to me and list in below <<<
 
-test "ArenaAllocator (reset with preheating)" {
-    var arena_allocator = ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    // provides some variance in the allocated data
+test "ArenaAllocator" {
+    if (enable_arena_allocator) {
+        {
+            var arena_allocator = ArenaAllocator.init(std.testing.allocator);
+            defer arena_allocator.deinit();
+            // provides some variance in the allocated data
 
-    var rng_src = std.rand.DefaultPrng.init(19930913);
-    const random = rng_src.random();
-    var rounds: usize = 25;
-    while (rounds > 0) {
-        rounds -= 1;
-        _ = arena_allocator.reset(.retain_capacity);
-        var alloced_bytes: usize = 0;
-        const total_size: usize = random.intRangeAtMost(usize, 256, 16384);
-        while (alloced_bytes < total_size) {
-            const size = random.intRangeAtMost(usize, 16, 256);
-            const alignment = 32;
-            const slice = try arena_allocator.allocator().alignedAlloc(u8, alignment, size);
-            try std.testing.expect(std.mem.isAligned(@intFromPtr(slice.ptr), alignment));
-            try std.testing.expectEqual(size, slice.len);
-            alloced_bytes += slice.len;
+            var rng_src = std.rand.DefaultPrng.init(19930913);
+            const random = rng_src.random();
+            var rounds: usize = 25;
+            while (rounds > 0) {
+                rounds -= 1;
+                _ = arena_allocator.reset(.retain_capacity);
+                var alloced_bytes: usize = 0;
+                const total_size: usize = random.intRangeAtMost(usize, 256, 16384);
+                while (alloced_bytes < total_size) {
+                    const size = random.intRangeAtMost(usize, 16, 256);
+                    const alignment = 32;
+                    const slice = try arena_allocator.allocator().alignedAlloc(u8, alignment, size);
+                    try std.testing.expect(std.mem.isAligned(@intFromPtr(slice.ptr), alignment));
+                    try std.testing.expectEqual(size, slice.len);
+                    alloced_bytes += slice.len;
+                }
+            }
+        }
+        {
+            var arena_allocator = ArenaAllocator.init(std.testing.allocator);
+            defer arena_allocator.deinit();
+            const a = arena_allocator.allocator();
+
+            // Create two internal buffers
+            _ = try a.alloc(u8, 1);
+            _ = try a.alloc(u8, 1000);
+
+            // Check that we have at least two buffers
+            try std.testing.expect(arena_allocator.state.buffer_list.first.?.next != null);
+
+            // This retains the first allocated buffer
+            try std.testing.expect(arena_allocator.reset(.{ .retain_with_limit = 1 }));
         }
     }
-}
-
-test "ArenaAllocator (reset while retaining a buffer)" {
-    var arena_allocator = ArenaAllocator.init(std.testing.allocator);
-    defer arena_allocator.deinit();
-    const a = arena_allocator.allocator();
-
-    // Create two internal buffers
-    _ = try a.alloc(u8, 1);
-    _ = try a.alloc(u8, 1000);
-
-    // Check that we have at least two buffers
-    try std.testing.expect(arena_allocator.state.buffer_list.first.?.next != null);
-
-    // This retains the first allocated buffer
-    try std.testing.expect(arena_allocator.reset(.{ .retain_with_limit = 1 }));
 }
 
 test "constructors" {
@@ -1779,17 +1816,19 @@ test "split" {
 }
 
 test "RegexUnmanged" {
-    var arena = ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
-    try testing.expectEqual(re.errorNumber(), 100);
-    try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
-    try testing.expect(re.succeed());
-    const matched_results = re.getResults();
-    try testing.expect(matched_results != null);
-    if (matched_results) |mr| {
-        std.debug.print("\n{d}\n", .{mr.len});
-        try testing.expect(mr[0].start == 0);
-        try testing.expect(mr[0].len == 5);
+    if (enable_pcre) {
+        var arena = ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
+        try testing.expectEqual(re.errorNumber(), 100);
+        try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
+        try testing.expect(re.succeed());
+        const matched_results = re.getResults();
+        try testing.expect(matched_results != null);
+        if (matched_results) |mr| {
+            // std.debug.print("\n{d}\n", .{mr.len});
+            try testing.expect(mr[0].start == 0);
+            try testing.expect(mr[0].len == 5);
+        }
     }
 }
