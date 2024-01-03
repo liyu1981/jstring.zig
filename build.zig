@@ -15,11 +15,19 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const obj_pcre_binding = b.addObject(.{
+        .name = "pcre_binding",
+        .target = target,
+        .optimize = optimize,
+    });
+    obj_pcre_binding.addCSourceFile(.{ .file = .{ .path = "src/pcre_binding.c" }, .flags = &.{"-std=c17"} });
+    obj_pcre_binding.addIncludePath(.{ .path = "/opt/homebrew/include" });
+
     const lib = b.addStaticLibrary(.{
         .name = "jstring",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
-        .root_source_file = .{ .path = "src/root.zig" },
+        .root_source_file = .{ .path = "src/jstring.zig" },
         .target = target,
         .optimize = optimize,
     });
@@ -71,8 +79,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    lib_unit_tests.addObject(obj_pcre_binding);
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    var run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     // const exe_unit_tests = b.addTest(.{
     //     .root_source_file = .{ .path = "src/main.zig" },

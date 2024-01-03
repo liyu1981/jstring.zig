@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const pcre = @import("pcre_binding.zig");
 
 /// A copy of zig's std.heap.ArenaAllocator for possibility to optimise for
 /// string usage.
@@ -277,6 +278,96 @@ pub const ArenaAllocator = struct {
     }
 };
 
+pub const RegexUnmanaged = struct {
+    context_: *pcre.RegexContext = undefined,
+
+    pub inline fn succeed(this: *const RegexUnmanaged) bool {
+        // PCRE error code 100 == success
+        return this.context_.error_number == 100;
+    }
+
+    pub inline fn errorNumber(this: *const RegexUnmanaged) usize {
+        return @as(usize, @intCast(this.context_.error_number));
+    }
+
+    pub inline fn errorOffset(this: *const RegexUnmanaged) usize {
+        return this.context_.error_offset;
+    }
+
+    pub inline fn errorMessage(this: *const RegexUnmanaged) []const u8 {
+        return this.context_.error_message[0..this.context_.error_message_len];
+    }
+
+    pub inline fn getResults(this: *const RegexUnmanaged) ?[]pcre.RegexMatchResult {
+        if (this.context_.matched_count > 0) {
+            const c = @as(usize, @intCast(this.context_.matched_count));
+            return this.context_.matched_results[0..c];
+        } else return null;
+    }
+
+    pub inline fn getNamedGroupResults(this: *const RegexUnmanaged) []pcre.RegexNamedGroupResult {
+        if (this.context_.named_group_count > 0) {
+            const c = @as(usize, @intCast(this.context_.named_group_count));
+            return this.context_.matched_group_results[0..c];
+        } else return null;
+    }
+
+    pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
+        var context_ = try allocator.create(pcre.RegexContext);
+        context_.regex_options = regex_options;
+        context_.match_options = match_options;
+        const result = pcre.compile(context_, pattern[0..].ptr);
+        if (result == 0) {
+            pcre.get_last_error_message(context_);
+        } else {
+            var mgrs = try allocator.alloc(pcre.RegexNamedGroupResult, context_.named_group_count);
+            context_.matched_group_results = mgrs[0..].ptr;
+        }
+        return RegexUnmanaged{
+            .context_ = context_,
+        };
+    }
+
+    pub fn deinit(this: *RegexUnmanaged, allocator: std.mem.Allocator) void {
+        defer allocator.destroy(this.context_);
+        pcre.free_context(this.context_);
+        allocator.free(this.context_.matched_results);
+        for (this.context_.matched_group_results) |matched_group_result| {
+            allocator.free(matched_group_result.name);
+        }
+        allocator.free(this.context_.matched_group_results);
+    }
+
+    pub fn match(this: *RegexUnmanaged, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
+        this.context_.match_options &= match_options;
+        const m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset_pos);
+        if (m > 0) {
+            if (fetch_results) {
+                try this.fetchResults(allocator);
+            }
+        }
+    }
+
+    pub fn fetchResults(this: *RegexUnmanaged, allocator: std.mem.Allocator) anyerror!void {
+        if (this.context_.matched_count > 0) {
+            // will only fetch when matched_count > 0, so this is ... relatively ... safe :)
+            const matched_count = @as(usize, @intCast(this.context_.matched_count));
+            const mrs = try allocator.alloc(pcre.RegexMatchResult, matched_count);
+            this.context_.matched_results = mrs.ptr;
+            pcre.prepare_named_groups(this.context_);
+            if (this.context_.named_group_count > 0) {
+                const named_group_count = @as(usize, @intCast(this.context_.named_group_count));
+                for (0..named_group_count) |i| {
+                    const name_len = this.context_.matched_group_results[i].name_len;
+                    const name_slice = try allocator.alloc(u8, name_len);
+                    this.context_.matched_group_results[i].name = name_slice.ptr;
+                }
+            }
+            pcre.fetch_match_results(this.context_);
+        }
+    }
+};
+
 pub const JStringUnmanaged = struct {
     const JStringUnmanagedError = error{
         UnicodeDecodeError,
@@ -327,6 +418,7 @@ pub const JStringUnmanaged = struct {
 
     // constructors
 
+    /// As the name assumes, it returns an empty string.
     pub fn newEmpty(allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         const new_slice = try allocator.alloc(u8, 0);
         return JStringUnmanaged{
@@ -334,6 +426,8 @@ pub const JStringUnmanaged = struct {
         };
     }
 
+    /// Returns a string copied the content of slice.
+    /// I.e., `const s = try JStringUnmanaged.newFromSlice(allocator, "hello,world");`
     pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) anyerror!JStringUnmanaged {
         const new_slice = try allocator.alloc(u8, string_slice.len);
         @memcpy(new_slice, string_slice);
@@ -342,6 +436,7 @@ pub const JStringUnmanaged = struct {
         };
     }
 
+    /// Returns a string copied the content of the other JStringUnmanaged
     pub fn newFromJStringUnmanaged(allocator: std.mem.Allocator, that: JStringUnmanaged) anyerror!JStringUnmanaged {
         const new_slice = try allocator.alloc(u8, that.len());
         @memcpy(new_slice, that.str_slice);
@@ -350,6 +445,8 @@ pub const JStringUnmanaged = struct {
         };
     }
 
+    /// Returns a string from the result of formatting, i.e., sprintf.
+    /// Example: `var s = JStringUnmanaged.newFromFormat(allocator, "{s}{d}", .{ "hello", 5 })`
     pub fn newFromFormat(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) anyerror!JStringUnmanaged {
         const new_slice = try std.fmt.allocPrint(allocator, fmt, args);
         return JStringUnmanaged{
@@ -357,6 +454,10 @@ pub const JStringUnmanaged = struct {
         };
     }
 
+    /// Returns a string from auto formatting a tuple of items. Essentially what
+    /// it does is to guess the fmt automatically. The max items of the tuple is
+    /// 32.
+    /// Example: `var s = JStringUnmanaged.newFromFormat(allocator, .{ "hello", 5 })`
     pub fn newFromTuple(allocator: std.mem.Allocator, rest_items: anytype) anyerror!JStringUnmanaged {
         const ArgsType = @TypeOf(rest_items);
         const args_type_info = @typeInfo(ArgsType);
@@ -382,8 +483,13 @@ pub const JStringUnmanaged = struct {
         return JStringUnmanaged.newFromFormat(allocator, fmt_buf[0..fmt_len], rest_items);
     }
 
+    // TODO: parseInt
+    // TODO: parseFloat
+
     // utils
 
+    /// Simple util to return the underlying slice's len (= this.str_slice.len).
+    /// Less typing, less errors.
     pub inline fn len(this: *const JStringUnmanaged) usize {
         return this.str_slice.len;
     }
@@ -406,22 +512,30 @@ pub const JStringUnmanaged = struct {
         return this.utf8_len;
     }
 
+    /// As the name assumes. Equals to `JStringUnmanaged.newFromJStringUnmanaged(allocator, this)`
     pub inline fn clone(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         return JStringUnmanaged.newFromJStringUnmanaged(allocator, this.*);
     }
 
+    /// Equals to `this.len() == 0` or `this.str_slice.len == 0`
     pub inline fn isEmpty(this: *const JStringUnmanaged) bool {
         return this.len() == 0;
     }
 
+    /// As simple as compare the underlying str_slice to string_slice
     pub inline fn eqlSlice(this: *const JStringUnmanaged, string_slice: []const u8) bool {
         return std.mem.eql(u8, this.str_slice, string_slice);
     }
 
+    /// Equals to `this.eqlSlice(that.str_slice)`
     pub inline fn eqlJStringUmanaged(this: *const JStringUnmanaged, that: JStringUnmanaged) bool {
-        return std.mem.eql(u8, this.str_slice, that.str_slice);
+        return this.eqlSlice(that.str_slice);
     }
 
+    /// explod this string to small strings sperated by ascii spaces while
+    /// respects utf8 chars. Limit can be -1 or positive numbers. When limit is
+    /// negative means auto calculate how many strings can return; otherwise
+    /// will return min(limit, possible max number of strings)
     pub fn explod(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
         const real_limit = brk: {
             if (limit < 0) {
@@ -570,6 +684,7 @@ pub const JStringUnmanaged = struct {
 
     // ** charCodeAt
 
+    /// charCodeAt does not make sense in zig, please use at or charAt!
     pub inline fn charCodeAt(this: *const JStringUnmanaged, index: isize) anyerror!u21 {
         _ = this;
         _ = index;
@@ -688,12 +803,14 @@ pub const JStringUnmanaged = struct {
 
     // ** fromCharCode
 
+    /// zig supports utf-8 natively, use newFromSlice instead.
     pub fn fromCharCode() JStringUnmanaged {
         @compileError("zig supports utf-8 natively, use newFromSlice instead.");
     }
 
     // ** fromCodePoint
 
+    /// zig supports utf-8 natively, use newFromSlice instead.
     pub fn fromCodePoint() JStringUnmanaged {
         @compileError("zig supports utf-8 natively, use newFromSlice instead.");
     }
@@ -814,9 +931,10 @@ pub const JStringUnmanaged = struct {
 
     // ** localeCompare
 
+    /// Not implemented! Does this method make sense in zig?
     pub fn localeCompare(this: *const JStringUnmanaged) bool {
         _ = this;
-        @compileError("Not implemented! Does this method make sense in zig?");
+        @compileError("Not implemented! Does localeCompare make sense in zig?");
     }
 
     // TODO match
@@ -824,9 +942,10 @@ pub const JStringUnmanaged = struct {
 
     // ** normalize
 
+    /// Not implemented! Does normalize make sense in zig?
     pub fn normalize(this: *const JStringUnmanaged) JStringUnmanaged {
         _ = this;
-        @compileError("Oops, normalize function is not supported!");
+        @compileError("Not implemented! Does normalize make sense in zig?");
     }
 
     // ** padEnd
@@ -904,14 +1023,16 @@ pub const JStringUnmanaged = struct {
 
     // ** raw
 
+    /// zig has no template literals like javascript, use newFromSlice/newFromFormat/newFromTuple instead.
     pub fn raw() JStringUnmanaged {
         @compileError("zig has no template literals like javascript, use newFromSlice/newFromFormat/newFromTuple instead.");
     }
 
     // ** repeat
 
+    /// repeat current string for `count` times and return as a new string.
     pub fn repeat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, count: usize) anyerror!JStringUnmanaged {
-        if (count == 0) {
+        if (count == 0 or this.len() == 0) {
             return JStringUnmanaged.newEmpty(allocator);
         }
 
@@ -932,6 +1053,13 @@ pub const JStringUnmanaged = struct {
 
     // ** slice
 
+    /// Slice part of current string and return a new copy with content
+    /// [index_start, index_end). Both `index_start` and `index_end` can be
+    /// positive or negative numbers. When is positive, means the forward
+    /// location from string beginning; when is negative, means the backward
+    /// location from string ending. Example: if `s` contains
+    /// "hello", `s.slice(allocator, 1, -1)` will return a new string with
+    /// content "ell"
     pub fn slice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: isize, index_end: isize) anyerror!JStringUnmanaged {
         const uindex_start = brk: {
             if (index_start >= 0) {
@@ -1149,6 +1277,7 @@ pub const JStringUnmanaged = struct {
 
     // ** toWellFormed
 
+    /// toWellFormed does not make sense in zig as zig is u8/utf8 based. No need to use this.
     pub fn toWellFormed(this: *const JStringUnmanaged) void {
         _ = this;
         @compileError("toWellFormed does not make sense in zig as zig is u8/utf8 based. No need to use this.");
@@ -1646,5 +1775,21 @@ test "split" {
         try testing.expect(strings3[0].eqlSlice("h"));
         try testing.expect(strings3[5].eqlSlice("💯"));
         try testing.expect(strings3[10].eqlSlice("d"));
+    }
+}
+
+test "RegexUnmanged" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
+    try testing.expectEqual(re.errorNumber(), 100);
+    try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
+    try testing.expect(re.succeed());
+    const matched_results = re.getResults();
+    try testing.expect(matched_results != null);
+    if (matched_results) |mr| {
+        std.debug.print("\n{d}\n", .{mr.len});
+        try testing.expect(mr[0].start == 0);
+        try testing.expect(mr[0].len == 5);
     }
 }
