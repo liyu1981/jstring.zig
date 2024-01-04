@@ -583,18 +583,26 @@ pub const JStringUnmanaged = struct {
 
     /// thin wrap of Regex's match against this.str_slice as search subject
     pub inline fn match(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
-        var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
-        try re.match(allocator, this.str_slice, offset, fetch_results, match_options);
-        return re;
+        if (enable_pcre) {
+            var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
+            try re.match(allocator, this.str_slice, offset, fetch_results, match_options);
+            return re;
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
     }
 
     // ** matchAll
 
     /// this wrap of Regex's matchAll against this.str_slice as search subject
     pub inline fn matchAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
-        var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
-        try re.matchAll(allocator, this.str_slice, offset, match_options);
-        return re;
+        if (enable_pcre) {
+            var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
+            try re.matchAll(allocator, this.str_slice, offset, match_options);
+            return re;
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
     }
 
     // ** normalize
@@ -711,11 +719,22 @@ pub const JStringUnmanaged = struct {
 
     /// This function is searching by regex so it requires allocator. For simple search
     /// use `indexOf`
-    pub fn search(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8) anyerror!isize {
-        _ = this;
-        _ = allocator;
-        _ = pattern;
-        @compileError("TODO!");
+    pub fn search(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize) anyerror!isize {
+        if (enable_pcre) {
+            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
+            try re.match(allocator, this.str_slice, offset, true, RegexUnmanaged.DefaultMatchOptions);
+            defer re.deinit(allocator);
+            if (re.succeed()) {
+                const maybe_results = re.getResults();
+                if (maybe_results) |results| {
+                    return @as(isize, @intCast(results[0].start));
+                } else return -1;
+            } else {
+                return -1;
+            }
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
     }
 
     // ** slice
@@ -1469,11 +1488,19 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             pub fn deinit(this: *Self, allocator: std.mem.Allocator) void {
                 defer allocator.destroy(this.context_);
                 pcre.free_context(this.context_);
-                allocator.free(this.context_.matched_results);
-                for (this.context_.matched_group_results) |matched_group_result| {
-                    allocator.free(matched_group_result.name);
+                var c: usize = 0;
+                if (this.context_.matched_results_capacity > 0) {
+                    c = @as(usize, @intCast(this.context_.matched_results_capacity));
+                    allocator.free(this.context_.matched_results[0..c]);
                 }
-                allocator.free(this.context_.matched_group_results);
+                if (this.context_.matched_group_count > 0) {
+                    c = @as(usize, @intCast(this.context_.matched_group_count));
+                    for (this.context_.matched_group_results[0..c]) |matched_group_result| {
+                        const l = matched_group_result.name_len;
+                        allocator.free(matched_group_result.name[0..l]);
+                    }
+                    allocator.free(this.context_.matched_group_results[0..c]);
+                }
             }
 
             /// reset regex for next new match. This will only reset
@@ -2087,6 +2114,11 @@ test "RegexUnmanged" {
         defer arena.deinit();
         {
             var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
+            try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
+            re.deinit(arena.allocator());
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
             try testing.expectEqual(re.errorNumber(), 100);
             try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
             try testing.expect(re.succeed());
@@ -2166,6 +2198,22 @@ test "match/matchAll" {
             }
             maybe_result = it.nextResult();
             try testing.expectEqual(maybe_result, null);
+        }
+    }
+}
+
+test "search" {
+    if (enable_pcre) {
+        var arena = ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+            var r = try str1.search(arena.allocator(), "hel+o", 0);
+            try testing.expectEqual(r, 0);
+            r = try str1.search(arena.allocator(), "hel+o", 3);
+            try testing.expectEqual(r, 6);
+            r = try str1.search(arena.allocator(), "hel+o", 8);
+            try testing.expectEqual(r, -1);
         }
     }
 }
