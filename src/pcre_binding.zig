@@ -202,15 +202,20 @@ pub const RegexContext = extern struct {
     error_offset: usize = @import("std").mem.zeroes(usize),
     error_message: [512]u8 = @import("std").mem.zeroes([512]u8),
     error_message_len: usize = @import("std").mem.zeroes(usize),
-    matched_count: i64 = @import("std").mem.zeroes(i64),
     regex_options: u32 = @import("std").mem.zeroes(u32),
     match_options: u32 = @import("std").mem.zeroes(u32),
+    with_match_result: u8 = @import("std").mem.zeroes(u8),
     named_group_count: u32 = @import("std").mem.zeroes(u32),
+    next_offset: usize = @import("std").mem.zeroes(usize),
+    origin_offset: usize = @import("std").mem.zeroes(usize),
+    rc: i64 = @import("std").mem.zeroes(i64),
+    matched_count: i64 = @import("std").mem.zeroes(i64),
+    matched_results_capacity: i64 = @import("std").mem.zeroes(i64),
     matched_results: [*c]RegexMatchResult = @import("std").mem.zeroes([*c]RegexMatchResult),
+    matched_group_count: i64 = @import("std").mem.zeroes(i64),
     matched_group_results: [*c]RegexNamedGroupResult = @import("std").mem.zeroes([*c]RegexNamedGroupResult),
     re: ?*anyopaque = @import("std").mem.zeroes(?*anyopaque),
     match_data: ?*anyopaque = @import("std").mem.zeroes(?*anyopaque),
-    ovector: ?*anyopaque = @import("std").mem.zeroes(?*anyopaque),
 };
 pub extern fn get_last_error_message(context: [*c]RegexContext) void;
 pub extern fn compile(context: [*c]RegexContext, pattern: [*c]const u8) u8;
@@ -218,6 +223,8 @@ pub extern fn free_context(context: [*c]RegexContext) void;
 pub extern fn match(context: [*c]RegexContext, subject: [*c]const u8, subject_len: usize, start_offset: usize) i64;
 pub extern fn prepare_named_groups(context: [*c]RegexContext) void;
 pub extern fn fetch_match_results(context: [*c]RegexContext) void;
+pub extern fn get_next_offset(context: [*c]RegexContext, subject: [*c]const u8, subject_len: usize) void;
+pub extern fn free_for_next_match(context: [*c]RegexContext) void;
 pub const __block = @compileError("unable to translate macro: undefined identifier `__blocks__`"); // (no file):37:9
 pub const __INTMAX_C_SUFFIX__ = @compileError("unable to translate macro: undefined identifier `L`"); // (no file):92:9
 pub const __UINTMAX_C_SUFFIX__ = @compileError("unable to translate macro: undefined identifier `UL`"); // (no file):98:9

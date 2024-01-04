@@ -1,8 +1,8 @@
-const std = @import("std");
-const testing = std.testing;
-
 const enable_arena_allocator: bool = true;
 const enable_pcre: bool = true;
+
+const std = @import("std");
+const testing = std.testing;
 
 const pcre = if (enable_pcre) @import("pcre_binding.zig") else undefined;
 
@@ -1029,7 +1029,7 @@ fn defineArenaAllocator(comptime enable: bool) type {
                 }
             };
 
-            pub fn allocator(self: *ArenaAllocator) std.mem.Allocator {
+            pub fn allocator(self: *Self) std.mem.Allocator {
                 return .{
                     .ptr = self,
                     .vtable = &.{
@@ -1042,11 +1042,11 @@ fn defineArenaAllocator(comptime enable: bool) type {
 
             const BufNode = std.SinglyLinkedList(usize).Node;
 
-            pub fn init(child_allocator: std.mem.Allocator) ArenaAllocator {
+            pub fn init(child_allocator: std.mem.Allocator) Self {
                 return (State{}).promote(child_allocator);
             }
 
-            pub fn deinit(self: ArenaAllocator) void {
+            pub fn deinit(self: *Self) void {
                 // NOTE: When changing this, make sure `reset()` is adjusted accordingly!
                 var it = self.state.buffer_list.first;
                 while (it) |node| {
@@ -1076,7 +1076,7 @@ fn defineArenaAllocator(comptime enable: bool) type {
 
             /// Queries the current memory use of this arena.
             /// This will **not** include the storage required for internal keeping.
-            pub fn queryCapacity(self: ArenaAllocator) usize {
+            pub fn queryCapacity(self: Self) usize {
                 var size: usize = 0;
                 var it = self.state.buffer_list.first;
                 while (it) |node| : (it = node.next) {
@@ -1098,7 +1098,7 @@ fn defineArenaAllocator(comptime enable: bool) type {
             /// be slower.
             ///
             /// NOTE: If `mode` is `free_all`, the function will always return `true`.
-            pub fn reset(self: *ArenaAllocator, mode: ResetMode) bool {
+            pub fn reset(self: *Self, mode: ResetMode) bool {
                 // Some words on the implementation:
                 // The reset function can be implemented with two basic approaches:
                 // - Counting how much bytes were allocated since the last reset, and storing that
@@ -1190,7 +1190,7 @@ fn defineArenaAllocator(comptime enable: bool) type {
                 return minimum_size + @sizeOf(BufNode);
             }
 
-            fn createNode(self: *ArenaAllocator, prev_len: usize, minimum_size: usize) ?*BufNode {
+            fn createNode(self: *Self, prev_len: usize, minimum_size: usize) ?*BufNode {
                 const actual_min_size = actualMinSize(minimum_size);
                 const len = prev_len + actual_min_size;
                 const log2_align = comptime std.math.log2_int(usize, @alignOf(BufNode));
@@ -1204,7 +1204,7 @@ fn defineArenaAllocator(comptime enable: bool) type {
             }
 
             fn alloc(ctx: *anyopaque, n: usize, log2_ptr_align: u8, ra: usize) ?[*]u8 {
-                const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
+                const self: *Self = @ptrCast(@alignCast(ctx));
                 _ = ra;
 
                 const ptr_align = @as(usize, 1) << @as(std.mem.Allocator.Log2Align, @intCast(log2_ptr_align));
@@ -1247,7 +1247,7 @@ fn defineArenaAllocator(comptime enable: bool) type {
             }
 
             fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
-                const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
+                const self: *Self = @ptrCast(@alignCast(ctx));
                 _ = log2_buf_align;
                 _ = ret_addr;
 
@@ -1272,7 +1272,7 @@ fn defineArenaAllocator(comptime enable: bool) type {
             fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
                 _ = log2_buf_align;
                 _ = ret_addr;
-                const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
+                const self: *Self = @ptrCast(@alignCast(ctx));
                 const cur_node = self.state.buffer_list.first orelse return;
                 const cur_buf = curBuf(curAllocBuf(cur_node));
                 if (@intFromPtr(cur_buf.ptr) + self.state.end_index == @intFromPtr(buf.ptr) + buf.len) {
@@ -1283,7 +1283,10 @@ fn defineArenaAllocator(comptime enable: bool) type {
         };
     } else {
         return struct {
-            pub fn init() void {
+            const Self = @This();
+
+            pub fn init(child_allocator: std.mem.Allocator) Self {
+                _ = child_allocator;
                 @compileError("disabled by comptime var `enable_arena_allocator`, set it true to enable.");
             }
         };
@@ -1294,8 +1297,17 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
     if (with_pcre) {
         return struct {
             const Self = @This();
+            const MatchedResultsList = std.SinglyLinkedList([]pcre.RegexMatchResult);
+            const MatchedGroupResultsList = std.SinglyLinkedList([]pcre.RegexNamedGroupResult);
+            const RegexError = error{
+                FetchBeforeMatch,
+            };
 
             context_: *pcre.RegexContext = undefined,
+            matched_results_list: MatchedResultsList = undefined,
+            matched_group_results_list: MatchedGroupResultsList = undefined,
+            total_matched_results: usize = 0,
+            total_matched_group_results: usize = 0,
 
             pub inline fn succeed(this: *const Self) bool {
                 // PCRE error code 100 == success
@@ -1321,9 +1333,9 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 } else return null;
             }
 
-            pub inline fn getNamedGroupResults(this: *const Self) []pcre.RegexNamedGroupResult {
-                if (this.context_.named_group_count > 0) {
-                    const c = @as(usize, @intCast(this.context_.named_group_count));
+            pub inline fn getGroupResults(this: *const Self) ?[]pcre.RegexNamedGroupResult {
+                if (this.context_.matched_group_count > 0) {
+                    const c = @as(usize, @intCast(this.context_.matched_group_count));
                     return this.context_.matched_group_results[0..c];
                 } else return null;
             }
@@ -1341,6 +1353,8 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 }
                 return Self{
                     .context_ = context_,
+                    .matched_results_list = MatchedResultsList{},
+                    .matched_group_results_list = MatchedGroupResultsList{},
                 };
             }
 
@@ -1354,21 +1368,59 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 allocator.free(this.context_.matched_group_results);
             }
 
+            /// reset regex for next new match. This will only reset
+            /// matched_results & matched_group_results & free pcre underlying match object
+            pub fn reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {
+                allocator.free(this.context_.matched_results);
+                for (this.context_.matched_group_results) |matched_group_result| {
+                    allocator.free(matched_group_result.name);
+                }
+                allocator.free(this.context_.matched_group_results);
+                // order is important, must do after free matched_results & matched_group_results
+                // as pcre.free_for_next_match will reset them
+                pcre.free_for_next_match(this.context_);
+                try this._reset();
+            }
+
+            fn _reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {
+                this.context_.matched_results = null;
+                var mgrs = try allocator.alloc(pcre.RegexNamedGroupResult, this.context_.named_group_count);
+                this.context_.matched_group_results = mgrs[0..].ptr;
+            }
+
+            /// if not fetch_results, this.context_.next_offset is not set, need to manually
+            /// do `this.getNextOffset(subject)` for it
             pub fn match(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
                 this.context_.match_options &= match_options;
                 const m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset_pos);
                 if (m > 0) {
                     if (fetch_results) {
                         try this.fetchResults(allocator);
+                        pcre.get_next_offset(this.context_, subject_slice[0..].ptr, subject_slice.len);
                     }
                 }
             }
 
+            /// must call after successful match, otherwise error
+            pub fn getNextOffset(this: *Self, subject_slice: []const u8) anyerror!usize {
+                if (this.context_.with_match_result == 1) {
+                    if (this.context_.matched_count > 0) {
+                        pcre.get_next_offset(this.context_, subject_slice[0..].ptr, subject_slice.len);
+                        return this.context_.next_offset;
+                    } else {
+                        return this.context_.origin_offset;
+                    }
+                } else {
+                    return error.FetchBeforeMatch;
+                }
+            }
+
+            /// only for single match fetchResults lazily. For matchAll it will always fetch while match.
             pub fn fetchResults(this: *Self, allocator: std.mem.Allocator) anyerror!void {
-                if (this.context_.matched_count > 0) {
-                    // will only fetch when matched_count > 0, so this is ... relatively ... safe :)
-                    const matched_count = @as(usize, @intCast(this.context_.matched_count));
-                    const mrs = try allocator.alloc(pcre.RegexMatchResult, matched_count);
+                if (this.context_.rc > 0) {
+                    // will only fetch when rc > 0 (which must equal matched_results_capacity), so this is ... relatively ... safe :)
+                    const matched_capacity = @as(usize, @intCast(this.context_.matched_results_capacity));
+                    const mrs = try allocator.alloc(pcre.RegexMatchResult, matched_capacity);
                     this.context_.matched_results = mrs.ptr;
                     pcre.prepare_named_groups(this.context_);
                     if (this.context_.named_group_count > 0) {
@@ -1382,10 +1434,116 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                     pcre.fetch_match_results(this.context_);
                 }
             }
+
+            /// fetchResults will be done while match.
+            pub fn matchAll(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, match_options: u32) anyerror!void {
+                this.context_.match_options &= match_options;
+                var m: i64 = 0;
+                var offset: usize = offset_pos;
+                while (offset < subject_slice.len) {
+                    m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset);
+                    if (m > 0) {
+                        try this.fetchResults(allocator);
+                        if (this.getResults()) |matched_results| {
+                            const n = try allocator.create(MatchedResultsList.Node);
+                            n.data = matched_results;
+                            this.matched_results_list.prepend(n);
+                            this.total_matched_results += matched_results.len;
+                        }
+                        if (this.getGroupResults()) |named_group_results| {
+                            const n = try allocator.create(MatchedGroupResultsList.Node);
+                            n.data = named_group_results;
+                            this.matched_group_results_list.prepend(n);
+                            this.total_matched_group_results += named_group_results.len;
+                        }
+                        pcre.get_next_offset(this.context_, subject_slice[0..].ptr, subject_slice.len);
+                        offset = this.context_.next_offset;
+                        try this._reset(allocator);
+                    } else break;
+                }
+
+                try this._mergeMatchedResults(allocator);
+                try this._mergeMatchedGroupResults(allocator);
+            }
+
+            fn _mergeMatchedResults(this: *Self, allocator: std.mem.Allocator) anyerror!void {
+                const total_matched_results: usize = this.total_matched_results;
+                var merged_matched_results: []pcre.RegexMatchResult = undefined;
+
+                if (total_matched_results > 0) {
+                    merged_matched_results = try allocator.alloc(pcre.RegexMatchResult, total_matched_results);
+                    var offset: usize = merged_matched_results.len - 1;
+                    brk: {
+                        while (this.matched_results_list.popFirst()) |n| {
+                            for (1..n.data.len + 1) |i| {
+                                merged_matched_results[offset] = n.data[n.data.len - i];
+                                if (offset == 0) {
+                                    allocator.free(n.data);
+                                    allocator.destroy(n);
+                                    break :brk;
+                                }
+                                offset -= 1;
+                            }
+                            allocator.free(n.data);
+                            allocator.destroy(n);
+                        }
+                    }
+                }
+
+                if (this.context_.matched_results_capacity > 0) {
+                    const old_matched_results = this.context_.matched_results[0..@as(usize, @intCast(this.context_.matched_results_capacity))];
+                    defer allocator.free(old_matched_results);
+                }
+
+                this.context_.matched_count = @as(i64, @intCast(total_matched_results));
+                this.context_.matched_results_capacity = @as(i64, @intCast(total_matched_results));
+                this.context_.matched_results = merged_matched_results.ptr;
+            }
+
+            fn _mergeMatchedGroupResults(this: *Self, allocator: std.mem.Allocator) anyerror!void {
+                const total_matched_group_results: usize = this.total_matched_group_results;
+
+                var merged_matched_group_results: []pcre.RegexNamedGroupResult = undefined;
+                if (total_matched_group_results > 0) {
+                    merged_matched_group_results = try allocator.alloc(pcre.RegexNamedGroupResult, total_matched_group_results);
+                    var offset: usize = merged_matched_group_results.len - 1;
+                    brk: {
+                        while (offset > 0) {
+                            while (this.matched_group_results_list.popFirst()) |n| {
+                                for (1..n.data.len + 1) |i| {
+                                    merged_matched_group_results[offset] = n.data[n.data.len - i];
+                                    if (offset == 0) {
+                                        allocator.free(n.data);
+                                        allocator.destroy(n);
+                                        break :brk;
+                                    }
+                                    offset -= 1;
+                                }
+                                allocator.free(n.data);
+                                allocator.destroy(n);
+                            }
+                        }
+                    }
+                }
+
+                if (this.context_.named_group_count > 0) {
+                    const old_matched_group_results = this.context_.matched_group_results[0..@as(usize, @intCast(this.context_.named_group_count))];
+                    defer allocator.free(old_matched_group_results);
+                }
+
+                this.context_.matched_group_count = @as(i64, @intCast(total_matched_group_results));
+                this.context_.matched_group_results = merged_matched_group_results.ptr;
+            }
         };
     } else {
         return struct {
-            pub fn init() void {
+            const Self = @This();
+
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+                _ = allocator;
+                _ = pattern;
+                _ = regex_options;
+                _ = match_options;
                 @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
             }
         };
@@ -1819,16 +1977,60 @@ test "RegexUnmanged" {
     if (enable_pcre) {
         var arena = ArenaAllocator.init(testing.allocator);
         defer arena.deinit();
-        var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
-        try testing.expectEqual(re.errorNumber(), 100);
-        try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
-        try testing.expect(re.succeed());
-        const matched_results = re.getResults();
-        try testing.expect(matched_results != null);
-        if (matched_results) |mr| {
-            // std.debug.print("\n{d}\n", .{mr.len});
-            try testing.expect(mr[0].start == 0);
-            try testing.expect(mr[0].len == 5);
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
+            try testing.expectEqual(re.errorNumber(), 100);
+            try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
+            try testing.expect(re.succeed());
+            const matched_results = re.getResults();
+            try testing.expect(matched_results != null);
+            if (matched_results) |mr| {
+                // std.debug.print("\n{d}\n", .{mr.len});
+                try testing.expect(mr[0].start == 0);
+                try testing.expect(mr[0].len == 5);
+            }
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
+            try testing.expectEqual(re.errorNumber(), 100);
+            try re.matchAll(arena.allocator(), "hello,hello,world", 0, 0);
+            try testing.expect(re.succeed());
+            const matched_results = re.getResults();
+            try testing.expect(matched_results != null);
+            if (matched_results) |mr| {
+                // std.debug.print("\n{d}\n", .{mr.len});
+                try testing.expect(mr.len == 2);
+                try testing.expect(mr[0].start == 0);
+                try testing.expect(mr[0].len == 5);
+                try testing.expect(mr[1].start == 6);
+                try testing.expect(mr[1].len == 5);
+            }
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "(?<h>hel+o)", 0, 0);
+            try testing.expectEqual(re.errorNumber(), 100);
+            try re.matchAll(arena.allocator(), "hello,hello,world", 0, 0);
+            try testing.expect(re.succeed());
+            const matched_results = re.getResults();
+            try testing.expect(matched_results != null);
+            if (matched_results) |mr| {
+                try testing.expect(mr.len == 2);
+                try testing.expect(mr[0].start == 0);
+                try testing.expect(mr[0].len == 5);
+                try testing.expect(mr[1].start == 6);
+                try testing.expect(mr[1].len == 5);
+            }
+            const matched_group_results = re.getGroupResults();
+            try testing.expect(matched_group_results != null);
+            if (matched_group_results) |mgr| {
+                try testing.expect(mgr.len == 2);
+                try testing.expectEqualSlices(u8, mgr[0].name[0..mgr[0].name_len], "h");
+                try testing.expect(mgr[0].start == 0);
+                try testing.expect(mgr[0].len == 5);
+                try testing.expectEqualSlices(u8, mgr[1].name[0..mgr[1].name_len], "h");
+                try testing.expect(mgr[1].start == 6);
+                try testing.expect(mgr[1].len == 5);
+            }
         }
     }
 }

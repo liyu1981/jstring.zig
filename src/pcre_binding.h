@@ -70,17 +70,25 @@ typedef struct {
     size_t error_offset;
     char error_message[512];
     size_t error_message_len;
-    int64_t matched_count;
+
     uint32_t regex_options;
     uint32_t match_options;
-    uint32_t named_group_count;
 
+    uint8_t with_match_result;
+    uint32_t named_group_count;
+    size_t next_offset;
+    size_t origin_offset;
+    int64_t rc;
+
+    int64_t matched_count;
+    int64_t matched_results_capacity;
     RegexMatchResult* matched_results;
+
+    int64_t matched_group_count;
     RegexNamedGroupResult* matched_group_results;
 
     void* re;
     void* match_data;
-    void* ovector;
 } RegexContext;
 
 void get_last_error_message(RegexContext* context);
@@ -89,5 +97,7 @@ void free_context(RegexContext* context);
 int64_t match(RegexContext* context, const unsigned char* subject, size_t subject_len, size_t start_offset);
 void prepare_named_groups(RegexContext* context);
 void fetch_match_results(RegexContext* context);
+void get_next_offset(RegexContext* context, const unsigned char* subject, size_t subject_len);
+void free_for_next_match(RegexContext* context);
 
 #endif
