@@ -13,6 +13,7 @@ pub const RegexUnmanaged = defineRegexUnmanaged(enable_pcre);
 pub const JStringUnmanaged = struct {
     const JStringUnmanagedError = error{
         UnicodeDecodeError,
+        RegexMatchFailed,
     };
 
     pub const U8Iterator = struct {
@@ -503,7 +504,7 @@ pub const JStringUnmanaged = struct {
         var occurence: isize = -1;
         const haystack_slice = this.str_slice[pos..];
         var k: usize = 0;
-        while (k < haystack_slice.len - needle_slice.len) : (k += 1) {
+        while (k < haystack_slice.len - needle_slice.len + 1) : (k += 1) {
             if (std.mem.eql(u8, haystack_slice[k .. k + needle_slice.len], needle_slice)) {
                 occurence = @as(isize, @intCast(k));
                 if (!want_last) {
@@ -719,13 +720,163 @@ pub const JStringUnmanaged = struct {
         };
     }
 
-    // TODO replace
+    // ** replace
+
+    pub fn replace(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+        return this._replace(allocator, pattern, replacement_slice, false);
+    }
+
+    pub fn replaceByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+        return this._replaceByRegex(allocator, pattern, replacement_slice, false);
+    }
+
+    // ** replaceAll
+
+    pub fn replaceAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+        return this._replace(allocator, pattern, replacement_slice, true);
+    }
+
+    pub fn replaceAllByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+        return this._replaceByRegex(allocator, pattern, replacement_slice, true);
+    }
+
+    fn _replace(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8, comptime match_all: bool) anyerror!JStringUnmanaged {
+        const max_gap_count: usize = if (match_all) @divFloor(this.str_slice.len, pattern.len) else 1;
+        var gaps = try allocator.alloc(_MatchedGapIterator.Gap, max_gap_count);
+        defer allocator.free(gaps);
+        var gap_count: usize = 0;
+        var search_offset: usize = 0;
+        var found: isize = 0;
+        if (match_all) {
+            while (true) {
+                found = this.indexOf(pattern, search_offset);
+                if (found >= 0) {
+                    gaps[gap_count] = _MatchedGapIterator.Gap{ .start = @as(usize, @intCast(found)), .len = pattern.len };
+                    gap_count += 1;
+                    search_offset = @as(usize, @intCast(found)) + pattern.len;
+                } else break;
+            }
+        } else {
+            found = this.indexOf(pattern, 0);
+            if (found >= 0) {
+                gaps[gap_count] = _MatchedGapIterator.Gap{ .start = @as(usize, @intCast(found)), .len = pattern.len };
+                gap_count += 1;
+                search_offset = @as(usize, @intCast(found)) + pattern.len;
+            }
+        }
+        if (gap_count == 0) {
+            return this.clone(allocator);
+        } else {
+            return this._joinGapsWithSlice(allocator, gaps[0..gap_count], replacement_slice);
+        }
+    }
+
+    fn _replaceByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8, comptime match_all: bool) anyerror!JStringUnmanaged {
+        if (enable_pcre) {
+            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
+            if (match_all) {
+                try re.matchAll(allocator, this.str_slice, 0, RegexUnmanaged.DefaultMatchOptions);
+            } else {
+                try re.match(allocator, this.str_slice, 0, true, RegexUnmanaged.DefaultMatchOptions);
+            }
+            if (re.succeed()) {
+                var first_gap_start_from_zero = false;
+                var last_gap_end_in_end = false;
+                const gap_count = brk: {
+                    // stupid method, scan once to know how many gaps we have
+                    // but since this helps us to avoid allocation (just mem access)
+                    // probably it is also fast enough
+                    var gap_it = _MatchedGapIterator.init(&re, this.str_slice);
+                    var count: usize = 0;
+                    while (gap_it.nextGap()) |g| {
+                        if (g.start == 0) {
+                            // gap is not overlapping, so simply check every one,
+                            // there must be one at most start at 0
+                            first_gap_start_from_zero = true;
+                        }
+                        if (g.start + g.len == this.str_slice.len) {
+                            // same idea, must be at most one end at the end
+                            last_gap_end_in_end = true;
+                        }
+                        count += 1;
+                    }
+                    break :brk count;
+                };
+                if (gap_count == 0) {
+                    return this.clone(allocator);
+                } else {
+                    var gaps = try allocator.alloc(_MatchedGapIterator.Gap, gap_count);
+                    defer allocator.free(gaps);
+                    var gap_it = _MatchedGapIterator.init(&re, this.str_slice);
+                    var count: usize = 0;
+                    while (gap_it.nextGap()) |g| {
+                        gaps[count] = _MatchedGapIterator.Gap{ .start = g.start, .len = g.len };
+                        count += 1;
+                    }
+                    return this._joinGapsWithSlice(allocator, gaps, replacement_slice);
+                }
+            } else return error.RegexMatchFailed;
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
+    }
+
+    fn _joinGapsWithSlice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, gaps: []_MatchedGapIterator.Gap, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+        var first_gap_start_from_zero = false;
+        var last_gap_end_in_end = false;
+        var total_gap_len: usize = 0;
+        for (gaps) |g| {
+            if (g.start == 0) {
+                // gap is not overlapping, so simply check every one,
+                // there must be one at most start at 0
+                first_gap_start_from_zero = true;
+            }
+            if (g.start + g.len == this.str_slice.len) {
+                // same idea, must be at most one end at the end
+                last_gap_end_in_end = true;
+            }
+            total_gap_len += g.len;
+        }
+        if (first_gap_start_from_zero and last_gap_end_in_end) {
+            // |<gap>|
+            return this.clone(allocator);
+        } else {
+            const new_slice_len = this.str_slice.len - total_gap_len + replacement_slice.len * gaps.len;
+            var new_slice = try allocator.alloc(u8, new_slice_len);
+            var copy_offset: usize = 0;
+            var copy_len: usize = 0;
+            var origin_offset: usize = 0;
+            for (gaps) |g| {
+                // |<gap>..<gap>..|, |..<gap>..<gap>| or |..<gap>..<gap>..<gap>..|
+                copy_len = g.start - origin_offset;
+                @memcpy(new_slice[copy_offset .. copy_offset + copy_len], this.str_slice[origin_offset .. origin_offset + copy_len]);
+                copy_offset += copy_len;
+                origin_offset += copy_len;
+
+                copy_len = replacement_slice.len;
+                @memcpy(new_slice[copy_offset .. copy_offset + copy_len], replacement_slice);
+                copy_offset += copy_len;
+                origin_offset += g.len;
+            }
+            if (!last_gap_end_in_end) {
+                // |<gap>..<gap>..| or |..<gap>..<gap>..<gap>..|
+                @memcpy(new_slice[copy_offset..], this.str_slice[origin_offset..]);
+            }
+            return JStringUnmanaged{
+                .str_slice = new_slice,
+            };
+        }
+    }
 
     // ** search
 
-    /// This function is searching by regex so it requires allocator. For simple search
-    /// use `indexOf`
-    pub fn search(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize) anyerror!isize {
+    /// simple search algorithm is alias of indexOf
+    pub inline fn search(this: *const JStringUnmanaged, pattern: []const u8, offset: usize) isize {
+        return this.indexOf(pattern, offset);
+    }
+
+    /// This function is searching by regex so it requires allocator.
+    pub fn searchByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize) anyerror!isize {
         if (enable_pcre) {
             var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
             try re.match(allocator, this.str_slice, offset, true, RegexUnmanaged.DefaultMatchOptions);
@@ -2403,11 +2554,11 @@ test "search" {
         defer arena.deinit();
         {
             var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
-            var r = try str1.search(arena.allocator(), "hel+o", 0);
+            var r = try str1.searchByRegex(arena.allocator(), "hel+o", 0);
             try testing.expectEqual(r, 0);
-            r = try str1.search(arena.allocator(), "hel+o", 3);
+            r = try str1.searchByRegex(arena.allocator(), "hel+o", 3);
             try testing.expectEqual(r, 6);
-            r = try str1.search(arena.allocator(), "hel+o", 8);
+            r = try str1.searchByRegex(arena.allocator(), "hel+o", 8);
             try testing.expectEqual(r, -1);
         }
     }
@@ -2437,6 +2588,29 @@ test "splitByRegex" {
             try testing.expect(results[0].eqlSlice("hel"));
             try testing.expect(results[1].eqlSlice(",hel"));
             try testing.expect(results[2].eqlSlice(",worl"));
+            // TODO: add more group match test cases
         }
+    }
+}
+
+test "replace/replaceAll/replaceByRegex/replaceAllByRegex" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+        var str2 = try str1.replace(arena.allocator(), "world", "jstring");
+        try testing.expect(str2.eqlSlice("hello,hello,jstring"));
+        str2 = try str1.replaceAll(arena.allocator(), "hello", "jstring");
+        try testing.expect(str2.eqlSlice("jstring,jstring,world"));
+    }
+    if (enable_pcre) {
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+            var str2 = try str1.replaceByRegex(arena.allocator(), "wor.d", "jstring");
+            try testing.expect(str2.eqlSlice("hello,hello,jstring"));
+            str2 = try str1.replaceAllByRegex(arena.allocator(), "hel+o", "jstring");
+            try testing.expect(str2.eqlSlice("jstring,jstring,world"));
+        }
+        // TODO: add more group match test cases
     }
 }
