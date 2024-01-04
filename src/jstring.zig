@@ -140,10 +140,41 @@ pub const JStringUnmanaged = struct {
         return JStringUnmanaged.newFromFormat(allocator, fmt_buf[0..fmt_len], rest_items);
     }
 
-    // TODO: parseInt
-    // TODO: parseFloat
+    pub inline fn newFromNumber(allocator: std.mem.Allocator, comptime T: type, value: T) anyerror!JStringUnmanaged {
+        switch (@typeInfo(T)) {
+            .Int => {},
+            .Float => {},
+            else => @compileError("parseInt can only work on number like types: integer or float (i32/u32/f32...)."),
+        }
+        return JStringUnmanaged.newFromFormat(allocator, "{d}", .{value});
+    }
+
+    pub fn newFromStringify(allocator: std.mem.Allocator, value: anytype) anyerror!JStringUnmanaged {
+        const new_slice = try std.json.stringifyAlloc(allocator, value, .{});
+        return JStringUnmanaged{
+            .str_slice = new_slice,
+        };
+    }
+
+    pub fn newFromStringifyWithOptions(allocator: std.mem.Allocator, value: anytype, options: std.json.StringifyOptions) anyerror!JStringUnmanaged {
+        const new_slice = try std.json.stringifyAlloc(allocator, value, options);
+        return JStringUnmanaged{
+            .str_slice = new_slice,
+        };
+    }
 
     // utils
+
+    pub fn format(
+        this: *const JStringUnmanaged,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        _ = options;
+        _ = fmt;
+        try writer.print("{s}", .{this.str_slice});
+    }
 
     /// Simple util to return the underlying slice's len (= this.str_slice.len). Less typing, less errors.
     pub inline fn len(this: *const JStringUnmanaged) usize {
@@ -388,10 +419,12 @@ pub const JStringUnmanaged = struct {
     /// Concat jstrings by format with fmt & .{ data }. It is a shortcut for first creating tmp str from
     /// JStringUnmanaged.newFromFormat then second this.concat(tmp str). (or below psudeo code)
     ///
-    ///   var tmp_jstring = JStringUnmanaged.newFromFormat(allocator, fmt, rest_items);
-    ///   defer tmp_jstring.deinit(allocator);
-    ///   const tmp_jstrings = []JStringUnmanaged{ tmp_jstring };
-    ///   this.concat(allocator, &tmp_jstrings);
+    /// ```
+    /// var tmp_jstring = JStringUnmanaged.newFromFormat(allocator, fmt, rest_items);
+    /// defer tmp_jstring.deinit(allocator);
+    /// const tmp_jstrings = []JStringUnmanaged{ tmp_jstring };
+    /// this.concat(allocator, &tmp_jstrings);
+    /// ```
     pub fn concatFormat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, comptime fmt: []const u8, rest_items: anytype) anyerror!JStringUnmanaged {
         const ArgsType = @TypeOf(rest_items);
         const args_type_info = @typeInfo(ArgsType);
@@ -588,7 +621,8 @@ pub const JStringUnmanaged = struct {
 
     // ** match
 
-    /// thin wrap of Regex's match against this.str_slice as search subject
+    /// Thin wrap of Regex's match against this.str_slice as search subject. The regex syntax used is pcre2, can read
+    /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here: https://regex101.com/
     pub inline fn match(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
         if (enable_pcre) {
             var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
@@ -601,7 +635,8 @@ pub const JStringUnmanaged = struct {
 
     // ** matchAll
 
-    /// this wrap of Regex's matchAll against this.str_slice as search subject
+    /// Thin wrap of Regex's matchAll against this.str_slice as search subject. The regex syntax used is pcre2, can read
+    /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here: https://regex101.com/
     pub inline fn matchAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
         if (enable_pcre) {
             var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
@@ -1580,6 +1615,9 @@ fn defineArenaAllocator(comptime enable: bool) type {
 
 fn defineRegexUnmanaged(comptime with_pcre: bool) type {
     if (with_pcre) {
+        // The RegexUnmanaged is THE struct used for regex matching. It integrates with PCRE2 (if enabled). The regex
+        // syntax used is pcre2, can read here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or
+        // try it here: https://regex101.com/
         return struct {
             const Self = @This();
             const MatchedResultsList = std.SinglyLinkedList([]pcre.RegexMatchResult);
@@ -1743,8 +1781,8 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 }
             }
 
-            /// reset regex for next new match. This will only reset
-            /// matched_results & matched_group_results & free pcre underlying match object
+            /// reset regex for next new match. This will only reset matched_results & matched_group_results & free
+            /// pcre underlying match object.
             pub fn reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {
                 allocator.free(this.context_.matched_results);
                 for (this.context_.matched_group_results) |matched_group_result| {
@@ -1765,8 +1803,10 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 this.context_.matched_group_results = mgrs[0..].ptr;
             }
 
-            /// if not fetch_results, this.context_.next_offset is not set, need to manually
-            /// do `this.getNextOffset(subject)` for it
+            /// if not fetch_results, this.context_.next_offset is not set, need to manually do
+            /// `this.getNextOffset(subject)` for it. The regex syntax used is pcre2, can read
+            /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here:
+            /// https://regex101.com/
             pub fn match(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
                 this.context_.match_options &= match_options;
                 const m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset_pos);
@@ -1812,7 +1852,9 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 }
             }
 
-            /// fetchResults will be done while match.
+            /// matchAll will do `fetchResults` in anyway. The regex syntax used is pcre2, can read
+            /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here:
+            /// https://regex101.com/.
             pub fn matchAll(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, match_options: u32) anyerror!void {
                 this.context_.match_options &= match_options;
                 var m: i64 = 0;
@@ -2163,6 +2205,29 @@ test "constructors" {
     try testing.expectEqual(str4.len(), 7);
     const str5 = try JStringUnmanaged.newFromTuple(arena.allocator(), .{ "jstring", 5 });
     try testing.expectEqual(str5.len(), 8);
+    const str6 = try JStringUnmanaged.newFromNumber(arena.allocator(), i32, -5);
+    try testing.expect(str6.eqlSlice("-5"));
+    const str7 = try JStringUnmanaged.newFromNumber(arena.allocator(), f32, -5.5);
+    try testing.expect(str7.eqlSlice("-5.5"));
+    const TestType = struct { a: i32, b: []const u8 };
+    const str8 = try JStringUnmanaged.newFromStringify(arena.allocator(), TestType{ .a = 123, .b = "xy" });
+    try testing.expect(str8.eqlSlice("{\"a\":123,\"b\":\"xy\"}"));
+    const str9 = try JStringUnmanaged.newFromStringifyWithOptions(arena.allocator(), TestType{ .a = 123, .b = "xy" }, .{ .whitespace = .indent_2 });
+    const str9value =
+        \\{
+        \\  "a": 123,
+        \\  "b": "xy"
+        \\}
+    ;
+    try testing.expect(str9.eqlSlice(str9value));
+}
+
+test "formatter" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
+    const s = try std.fmt.allocPrint(arena.allocator(), "{}", .{str1});
+    try testing.expectEqualSlices(u8, s, "hello,world");
 }
 
 test "utils" {

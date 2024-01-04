@@ -32,6 +32,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     lib.addObject(obj_pcre_binding);
+    lib.linkSystemLibrary2("libpcre2-8", .{ .use_pkg_config = .yes });
+    // lib.linkSystemLibraryName("libpcre2-8");
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -81,7 +83,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     lib_unit_tests.addObject(obj_pcre_binding);
-
+    lib_unit_tests.linkSystemLibrary2("libpcre2-8", .{ .use_pkg_config = .yes });
     var run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     // const exe_unit_tests = b.addTest(.{
