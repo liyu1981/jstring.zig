@@ -159,6 +159,12 @@ pub const JStringUnmanaged = struct {
         return JStringUnmanaged.newFromJStringUnmanaged(allocator, this.*);
     }
 
+    fn _cloneAsArray(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror![]JStringUnmanaged {
+        var result_jstrings = try allocator.alloc(JStringUnmanaged, 1);
+        result_jstrings[0] = try this.clone(allocator);
+        return result_jstrings;
+    }
+
     /// Equals to `this.len() == 0` or `this.str_slice.len == 0`
     pub inline fn isEmpty(this: *const JStringUnmanaged) bool {
         return this.len() == 0;
@@ -524,22 +530,22 @@ pub const JStringUnmanaged = struct {
         var occurence: isize = -1;
         const haystack_slice = this.str_slice[pos..];
 
-        const t = try _kmp_build_failure_table(allocator, needle_slice);
+        const t = try _kmpBuildFailureTable(allocator, needle_slice);
         defer allocator.free(t);
 
         var j: isize = 0;
         for (0..haystack_slice.len) |i| {
-            if (_slice_at(u8, haystack_slice, @as(isize, @intCast(i))) == _slice_at(u8, needle_slice, j)) {
+            if (_sliceAt(u8, haystack_slice, @as(isize, @intCast(i))) == _sliceAt(u8, needle_slice, j)) {
                 j += 1;
                 if (j >= needle_slice.len) {
                     occurence = @as(isize, @intCast(i)) - j + 1;
                     if (!want_last) {
                         return if (occurence >= 0) @as(isize, @intCast(pos)) + occurence else occurence;
                     }
-                    j = _slice_at(isize, t, j);
+                    j = _sliceAt(isize, t, j);
                 }
             } else if (j > 0) {
-                j = _slice_at(isize, t, j);
+                j = _sliceAt(isize, t, j);
             }
         }
 
@@ -881,12 +887,106 @@ pub const JStringUnmanaged = struct {
         return this.explode(allocator, limit);
     }
 
-    pub fn splitByRegex(this: *JStringUnmanaged, allocator: std.mem.Allocator, regex: anytype, limit: isize) anyerror![]JStringUnmanaged {
-        _ = this;
-        _ = allocator;
-        _ = regex;
-        _ = limit;
-        @compileError("TODO, not yet implemented!");
+    /// Split based on regex matching. With greate power comes great responsibility.
+    pub fn splitByRegex(this: *JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, limit: isize) anyerror![]JStringUnmanaged {
+        if (enable_pcre) {
+            const real_limit = brk: {
+                if (limit < 0) {
+                    break :brk this.str_slice.len;
+                } else {
+                    break :brk @as(usize, @intCast(limit));
+                }
+            };
+            if (real_limit == 0) {
+                return this._cloneAsArray(allocator);
+            }
+
+            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
+            try re.matchAll(allocator, this.str_slice, offset, RegexUnmanaged.DefaultMatchOptions);
+            if (re.succeed()) {
+                var first_gap_start_from_zero = false;
+                var last_gap_end_in_end = false;
+                const gap_count = brk: {
+                    // stupid method, scan once to know how many gaps we have
+                    // but since this helps us to avoid allocation (just mem access)
+                    // probably it is also fast enough
+                    var gap_it = _MatchedGapIterator.init(&re, this.str_slice);
+                    var count: usize = 0;
+                    while (gap_it.nextGap()) |g| {
+                        if (g.start == 0) {
+                            // gap is not overlapping, so simply check every one,
+                            // there must be one at most start at 0
+                            first_gap_start_from_zero = true;
+                        }
+                        if (g.start + g.len == this.str_slice.len) {
+                            // same idea, must be at most one end at the end
+                            last_gap_end_in_end = true;
+                        }
+                        count += 1;
+                    }
+                    break :brk count;
+                };
+                if (gap_count == 0) {
+                    return this._cloneAsArray(allocator);
+                } else {
+                    const jstrings_count = brk2: {
+                        const count_by_gap = brk: {
+                            if (first_gap_start_from_zero and last_gap_end_in_end) {
+                                // |<gap>|
+                                break :brk 1;
+                            } else if (first_gap_start_from_zero or last_gap_end_in_end) {
+                                // |<gap>..<gap>..| or |..<gap>..<gap>|
+                                break :brk gap_count;
+                            } else {
+                                // |..<gap>..<gap>..<gap>..|
+                                break :brk gap_count + 1;
+                            }
+                        };
+                        break :brk2 if (real_limit < count_by_gap) real_limit else count_by_gap;
+                    };
+                    if (jstrings_count == 1) {
+                        return this._cloneAsArray(allocator);
+                    }
+                    var result_jstrings = try allocator.alloc(JStringUnmanaged, jstrings_count);
+                    var count: usize = 0;
+                    var slice_offset: usize = 0;
+                    var checked_gap_count: usize = 0;
+                    var gap_it = _MatchedGapIterator.init(&re, this.str_slice);
+                    while (gap_it.nextGap()) |g| {
+                        if (count >= jstrings_count) {
+                            break;
+                        }
+                        // no more |<gap>| case as we returned just before this
+                        if (first_gap_start_from_zero) {
+                            // |<gap>..<gap>..|
+                            if (checked_gap_count == 0) {
+                                checked_gap_count += 1;
+                                slice_offset = g.start + g.len;
+                                continue;
+                            }
+                            result_jstrings[count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[slice_offset..g.start]);
+                            slice_offset = g.start + g.len;
+                        } else {
+                            // |..<gap>..<gap>| or |..<gap>..<gap>..<gap>..|
+                            result_jstrings[count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[slice_offset..g.start]);
+                            slice_offset = g.start + g.len;
+                        }
+                        count += 1;
+                        checked_gap_count += 1;
+                    }
+                    if (count < jstrings_count and !last_gap_end_in_end) {
+                        // |<gap>..<gap>..|
+                        // or
+                        // |..<gap>..<gap>..<gap>..|
+                        // get the last piece done
+                        result_jstrings[count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[slice_offset..]);
+                    }
+                    return result_jstrings;
+                }
+            } else return this._cloneAsArray(allocator);
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
     }
 
     // ** startsWith
@@ -1390,8 +1490,8 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                     value: []const u8,
                 };
 
-                maybe_group_results: []pcre.RegexNamedGroupResult,
-                cur_pos: usize,
+                maybe_group_results: ?[]pcre.RegexNamedGroupResult,
+                cur_pos: usize = 0,
                 subject_slice: []const u8,
 
                 pub fn init(regex: *Self, subject: []const u8) MatchedGroupResultIterator {
@@ -1401,7 +1501,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                     };
                 }
 
-                pub fn nextResult(this: *MatchedResultIterator) ?Result {
+                pub fn nextResult(this: *MatchedGroupResultIterator) ?Result {
                     if (this.maybe_group_results) |group_results| {
                         if (this.cur_pos < group_results.len) {
                             const start = group_results[this.cur_pos].start;
@@ -1519,6 +1619,8 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
 
             fn _reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {
                 this.context_.matched_results = null;
+                this.context_.matched_count = 0;
+                this.context_.matched_results_capacity = 0;
                 var mgrs = try allocator.alloc(pcre.RegexNamedGroupResult, this.context_.named_group_count);
                 this.context_.matched_group_results = mgrs[0..].ptr;
             }
@@ -1739,8 +1841,101 @@ fn _bufPrintSpecifier(comptime type_info: std.builtin.Type, comptime fmt_buf: []
     }
 }
 
+// take advantage of both matched results and group matched results are sorted based on start
+// when taking out of pcre, do a merge algorithm here
+const _MatchedGapIterator = struct {
+    const Gap = struct {
+        start: usize,
+        len: usize,
+    };
+
+    it: RegexUnmanaged.MatchedResultIterator,
+    it_should_fetch: bool = true,
+    group_it: RegexUnmanaged.MatchedGroupResultIterator,
+    group_it_should_fetch: bool = true,
+    maybe_result: ?RegexUnmanaged.MatchedResultIterator.Result = null,
+    maybe_group_result: ?RegexUnmanaged.MatchedGroupResultIterator.Result = null,
+    last_start: usize = 0,
+    last_len: usize = 0,
+
+    pub fn init(re: *RegexUnmanaged, subject_slice: []const u8) _MatchedGapIterator {
+        return _MatchedGapIterator{
+            .it = re.getResultsIterator(subject_slice),
+            .group_it = re.getGroupResultsIterator(subject_slice),
+        };
+    }
+
+    pub fn nextGap(this: *_MatchedGapIterator) ?Gap {
+        if (this.it_should_fetch) {
+            this.maybe_result = this.it.nextResult();
+            this.it_should_fetch = false;
+        }
+        if (this.group_it_should_fetch) {
+            this.maybe_group_result = this.group_it.nextResult();
+            this.group_it_should_fetch = false;
+        }
+        if (this.maybe_result) |r| {
+            if (this.maybe_group_result) |gr| {
+                if (r.start <= gr.start) {
+                    return this._nextGapFromIt();
+                } else {
+                    return this._nextGapFromGroupIt();
+                }
+            } else {
+                return this._nextGapFromIt();
+            }
+        }
+        if (this.maybe_group_result) |gr| {
+            if (this.maybe_result) |r| {
+                if (r.start <= gr.start) {
+                    return this._nextGapFromIt();
+                } else {
+                    return this._nextGapFromGroupIt();
+                }
+            } else {
+                return this._nextGapFromGroupIt();
+            }
+        }
+        return null;
+    }
+
+    fn _nextGapFromIt(this: *_MatchedGapIterator) ?Gap {
+        if (this.maybe_result) |r| {
+            this.it_should_fetch = true;
+            if (this.last_start == r.start and this.last_len == r.len) {
+                return this.nextGap();
+            } else {
+                this.last_start = r.start;
+                this.last_len = r.len;
+                return Gap{
+                    .start = r.start,
+                    .len = r.len,
+                };
+            }
+        }
+        unreachable;
+    }
+
+    fn _nextGapFromGroupIt(this: *_MatchedGapIterator) ?Gap {
+        if (this.maybe_group_result) |gr| {
+            this.group_it_should_fetch = true;
+            if (this.last_start == gr.start and this.last_len == gr.len) {
+                return this.nextGap();
+            } else {
+                this.last_start = gr.start;
+                this.last_len = gr.len;
+                return Gap{
+                    .start = gr.start,
+                    .len = gr.len,
+                };
+            }
+        }
+        unreachable;
+    }
+};
+
 /// very unsafe, you have been warned to know what you are doing
-fn _slice_at(comptime T: type, haystack: []const T, index: isize) T {
+fn _sliceAt(comptime T: type, haystack: []const T, index: isize) T {
     if (index >= 0) {
         return haystack[@as(usize, @intCast(index))];
     } else {
@@ -1748,17 +1943,17 @@ fn _slice_at(comptime T: type, haystack: []const T, index: isize) T {
     }
 }
 
-fn _kmp_build_failure_table(allocator: std.mem.Allocator, needle_slice: []const u8) anyerror![]isize {
+fn _kmpBuildFailureTable(allocator: std.mem.Allocator, needle_slice: []const u8) anyerror![]isize {
     const t = try allocator.alloc(isize, (needle_slice.len + 1));
     @memset(t, 0);
 
     var j: isize = 0;
     for (1..needle_slice.len) |i| {
-        j = _slice_at(isize, t, @as(isize, @intCast(i)));
-        while (j > 0 and _slice_at(u8, needle_slice, @as(isize, @intCast(i))) != _slice_at(u8, needle_slice, j)) {
-            j = _slice_at(isize, t, j);
+        j = _sliceAt(isize, t, @as(isize, @intCast(i)));
+        while (j > 0 and _sliceAt(u8, needle_slice, @as(isize, @intCast(i))) != _sliceAt(u8, needle_slice, j)) {
+            j = _sliceAt(isize, t, j);
         }
-        if (j > 0 or _slice_at(u8, needle_slice, @as(isize, @intCast(i))) == _slice_at(u8, needle_slice, j)) {
+        if (j > 0 or _sliceAt(u8, needle_slice, @as(isize, @intCast(i))) == _sliceAt(u8, needle_slice, j)) {
             t[i + 1] = j + 1;
         }
     }
@@ -1766,7 +1961,7 @@ fn _kmp_build_failure_table(allocator: std.mem.Allocator, needle_slice: []const 
     return t;
 }
 
-fn _test_return_error_union(value_or_error: bool, value: i32, err: anyerror) !i32 {
+fn _testReturnErrorUnion(value_or_error: bool, value: i32, err: anyerror) !i32 {
     return if (value_or_error) value else err;
 }
 
@@ -1878,7 +2073,7 @@ test "concat" {
     const str5 = try str1.concatFormat(arena.allocator(), "{s}", .{" jstring"});
     try testing.expect(str5.eqlSlice("hello,world jstring"));
     const optional_6: ?i32 = 6;
-    const error1 = _test_return_error_union(false, 0, error.OutOfMemory);
+    const error1 = _testReturnErrorUnion(false, 0, error.OutOfMemory);
     const str6 = try str1.concatTuple(arena.allocator(), .{
         " jstring",
         5,
@@ -2214,6 +2409,34 @@ test "search" {
             try testing.expectEqual(r, 6);
             r = try str1.search(arena.allocator(), "hel+o", 8);
             try testing.expectEqual(r, -1);
+        }
+    }
+}
+
+test "splitByRegex" {
+    if (enable_pcre) {
+        var arena = ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+            var results = try str1.splitByRegex(arena.allocator(), "l+", 0, 0);
+            try testing.expectEqual(results.len, 1);
+            try testing.expect(results[0].eqlSlice("hello,hello,world"));
+            results = try str1.splitByRegex(arena.allocator(), "l+", 0, -1);
+            try testing.expectEqual(results.len, 4);
+            try testing.expect(results[0].eqlSlice("he"));
+            try testing.expect(results[1].eqlSlice("o,he"));
+            try testing.expect(results[2].eqlSlice("o,wor"));
+            try testing.expect(results[3].eqlSlice("d"));
+            results = try str1.splitByRegex(arena.allocator(), "he", 0, -1);
+            try testing.expectEqual(results.len, 2);
+            try testing.expect(results[0].eqlSlice("llo,"));
+            try testing.expect(results[1].eqlSlice("llo,world"));
+            results = try str1.splitByRegex(arena.allocator(), "lo|d", 0, -1);
+            try testing.expectEqual(results.len, 3);
+            try testing.expect(results[0].eqlSlice("hel"));
+            try testing.expect(results[1].eqlSlice(",hel"));
+            try testing.expect(results[2].eqlSlice(",worl"));
         }
     }
 }
