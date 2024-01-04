@@ -1,3 +1,18 @@
+/// jstring.zig
+///
+/// Author: Yu Li (liyu1981@gmail.com)
+///
+/// Target: create a reusable string lib for myself with all familiar methods methods can find in javascript string.
+///
+/// Reason:
+///   1. string is important we all know, so a good string lib will be very useful.
+///   2. javascript string is (in my opinion) the most battle tested string library out there, strike a good balance
+///      between features and complexity.
+///
+/// The javascript string specs and methods this file use as reference can be found at
+///   https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String
+///
+/// All methods except those marked as deprecated (such as anchor, big, blink etc) are implemented, in zig way.
 const enable_arena_allocator: bool = true;
 const enable_pcre: bool = true;
 
@@ -69,8 +84,8 @@ pub const JStringUnmanaged = struct {
         };
     }
 
-    /// Returns a string copied the content of slice.
-    /// I.e., `const s = try JStringUnmanaged.newFromSlice(allocator, "hello,world");`
+    /// Returns a string copied the content of slice. i.e.,
+    /// `const s = try JStringUnmanaged.newFromSlice(allocator, "hello,world");`
     pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) anyerror!JStringUnmanaged {
         const new_slice = try allocator.alloc(u8, string_slice.len);
         @memcpy(new_slice, string_slice);
@@ -97,9 +112,8 @@ pub const JStringUnmanaged = struct {
         };
     }
 
-    /// Returns a string from auto formatting a tuple of items. Essentially what
-    /// it does is to guess the fmt automatically. The max items of the tuple is
-    /// 32.
+    /// Returns a string from auto formatting a tuple of items. Essentially what it does is to guess the fmt
+    /// automatically. The max items of the tuple is 32.
     /// Example: `var s = JStringUnmanaged.newFromFormat(allocator, .{ "hello", 5 })`
     pub fn newFromTuple(allocator: std.mem.Allocator, rest_items: anytype) anyerror!JStringUnmanaged {
         const ArgsType = @TypeOf(rest_items);
@@ -131,14 +145,13 @@ pub const JStringUnmanaged = struct {
 
     // utils
 
-    /// Simple util to return the underlying slice's len (= this.str_slice.len).
-    /// Less typing, less errors.
+    /// Simple util to return the underlying slice's len (= this.str_slice.len). Less typing, less errors.
     pub inline fn len(this: *const JStringUnmanaged) usize {
         return this.str_slice.len;
     }
 
-    /// First time call utf8Len will init the utf8_view and calculate len once.
-    /// After that we will just use the cached view and len.
+    /// First time call utf8Len will init the utf8_view and calculate len once. After that we will just use the cached
+    /// view and len.
     pub fn utf8Len(this: *JStringUnmanaged) anyerror!usize {
         if (!this.utf8_view_inited) {
             this.utf8_view = try std.unicode.Utf8View.init(this.str_slice);
@@ -181,10 +194,9 @@ pub const JStringUnmanaged = struct {
         return this.eqlSlice(that.str_slice);
     }
 
-    /// explode this string to small strings sperated by ascii spaces while
-    /// respects utf8 chars. Limit can be -1 or positive numbers. When limit is
-    /// negative means auto calculate how many strings can return; otherwise
-    /// will return min(limit, possible max number of strings)
+    /// explode this string to small strings sperated by ascii spaces while respects utf8 chars. Limit can be -1 or
+    /// positive numbers. When limit is negative means auto calculate how many strings can return; otherwise will return
+    /// min(limit, possible max number of strings)
     pub fn explode(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
         const real_limit = brk: {
             if (limit < 0) {
@@ -243,10 +255,6 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    // methods as listed at https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String
-
-    // all methods marked as deprecated (such as anchor, big, blink etc) are omitted.
-
     // ** iterator
 
     /// return an iterator can iterate char(u8) by char, from the beginning.
@@ -274,10 +282,9 @@ pub const JStringUnmanaged = struct {
 
     // ** at
 
-    /// different to Javascript's string.at, return unicode char(u21) of index,
-    /// as prefer utf-8 string. Same to Javascript, accept index as i32: when
-    /// postive is from beginning; when negative is from ending; when
-    /// index == 0, return the the first char if not empty.
+    /// different to Javascript's string.at, return unicode char(u21) of index, as prefer utf-8 string. Same to
+    /// Javascript, accept index as `i32`: when postive is from beginning; when negative is from ending; when
+    /// `index == 0`, return the the first char if not empty.
     pub fn at(this: *JStringUnmanaged, index: isize) anyerror!u21 {
         const utf8_len = try this.utf8Len();
         if (index >= utf8_len) {
@@ -307,10 +314,9 @@ pub const JStringUnmanaged = struct {
 
     // ** charAt
 
-    /// different to Javascript's string.charAt, return u8 of index, as prefer utf-8
-    /// string. Same to Javascript, accept index as i32: when postive is from
-    /// beginning; when negative is from ending; when index == 0, return the
-    /// the first char if not empty.
+    /// different to Javascript's string.charAt, return u8 of index, as prefer utf-8 string. Same to Javascript,
+    /// accept index as `i32`: when postive is from beginning; when negative is from ending; when `index == 0`, return
+    /// the the first char if not empty.
     pub fn charAt(this: *const JStringUnmanaged, index: isize) anyerror!u8 {
         if (index >= this.len()) {
             return error.IndexOutOfBounds;
@@ -351,8 +357,8 @@ pub const JStringUnmanaged = struct {
 
     // ** concat
 
-    /// Concat jstrings in rest_jstrings in order, return a new allocated
-    /// jstring. If rest_jstrings.len == 0, will return a copy of this jstring.
+    /// Concat jstrings in rest_jstrings in order, return a new allocated jstring. If `rest_jstrings.len == 0`, will
+    /// return a copy of this jstring.
     pub fn concat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_jstrings: []const JStringUnmanaged) anyerror!JStringUnmanaged {
         if (rest_jstrings.len == 0) {
             return this.clone(allocator);
@@ -379,9 +385,8 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    /// Concat jstrings by format with fmt & .{ data }. It is a shortcut for
-    /// first creating tmp str from JStringUnmanaged.newFromFormat then second
-    /// this.concat(tmp str). (or below psudeo code)
+    /// Concat jstrings by format with fmt & .{ data }. It is a shortcut for first creating tmp str from
+    /// JStringUnmanaged.newFromFormat then second this.concat(tmp str). (or below psudeo code)
     ///
     ///   var tmp_jstring = JStringUnmanaged.newFromFormat(allocator, fmt, rest_items);
     ///   defer tmp_jstring.deinit(allocator);
@@ -410,7 +415,6 @@ pub const JStringUnmanaged = struct {
     }
 
     /// Similar to concatFormat, but try to auto gen fmt from rest_items.
-    /// Not support Optional & ErrorUnion in rest_items.
     pub fn concatTuple(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_items: anytype) anyerror!JStringUnmanaged {
         const ArgsType = @TypeOf(rest_items);
         const args_type_info = @typeInfo(ArgsType);
@@ -477,17 +481,15 @@ pub const JStringUnmanaged = struct {
 
     // ** indexOf
 
-    /// The indexOf() method searches this string and returns the index of the
-    /// first occurrence of the specified substring. It takes an starting
-    /// position and returns the first occurrence of the specified substring at
-    /// an index greater than or equal to the specified number.
+    /// The indexOf() method searches this string and returns the index of the first occurrence of the specified
+    /// substring. It takes an starting position and returns the first occurrence of the specified substring at an index
+    /// greater than or equal to the specified number.
     pub inline fn indexOf(this: *const JStringUnmanaged, needle_slice: []const u8, pos: usize) isize {
         return this._naive_indexOf(needle_slice, pos, false);
     }
 
-    /// Fast version of indexOf as it uses KMP algorithm for searching. Will
-    /// result in O(this.len+needle_slice.len) but also requires allocator for
-    /// creating KMP lookup table.
+    /// Fast version of indexOf as it uses KMP algorithm for searching. Will result in O(this.len+needle_slice.len) but
+    /// also requires allocator for creating KMP lookup table.
     pub inline fn fastIndexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize) anyerror!isize {
         return this._kmp_indexOf(allocator, needle_slice, pos, false);
     }
@@ -555,8 +557,7 @@ pub const JStringUnmanaged = struct {
 
     // ** isWellFormed
 
-    /// similar to definition in javascript, but with difference that we are
-    /// checking utf8.
+    /// similar to definition in javascript, but with difference that we are checking utf8.
     pub fn isWellFormed(this: *const JStringUnmanaged) bool {
         switch (this.utf8Len()) {
             .Error => return false,
@@ -566,10 +567,9 @@ pub const JStringUnmanaged = struct {
 
     // ** lastIndexOf
 
-    /// The lastIndexOf() method searches this string and returns the index of
-    /// the last occurrence of the specified substring. It takes an optional
-    /// starting position and returns the last occurrence of the specified
-    /// substring at an index less than or equal to the specified number.
+    /// The lastIndexOf() method searches this string and returns the index of the last occurrence of the specified
+    /// substring. It takes an optional starting position and returns the last occurrence of the specified substring at
+    /// an index less than or equal to the specified number.
     pub inline fn lastIndexOf(this: *const JStringUnmanaged, needle_slice: []const u8, pos: usize) isize {
         return this._naive_indexOf(needle_slice, pos, true);
     }
@@ -622,11 +622,9 @@ pub const JStringUnmanaged = struct {
 
     // ** padEnd
 
-    /// The padEnd method creates a new string by padding this string with a
-    /// given slice (repeated, if needed) so that the resulting string reaches
-    /// a given length. The padding is applied from the end of this string. If
-    /// padString is too long to stay within targetLength, it will be truncated
-    /// from the beginning.
+    /// The padEnd method creates a new string by padding this string with a given slice (repeated, if needed) so that
+    /// the resulting string reaches a given length. The padding is applied from the end of this string. If padString is
+    /// too long to stay within targetLength, it will be truncated from the beginning.
     pub fn padEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) anyerror!JStringUnmanaged {
         if (this.len() >= wanted_len) {
             return this.clone(allocator);
@@ -650,19 +648,16 @@ pub const JStringUnmanaged = struct {
         };
     }
 
-    /// JString version of padEnd, accept pad_string (*const JStringUnmanaged)
-    /// instead of slice.
+    /// JString version of padEnd, accept pad_string (*const JStringUnmanaged) instead of slice.
     pub inline fn padEndJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) anyerror!JStringUnmanaged {
         return this.padEnd(allocator, wanted_len, pad_string.slice);
     }
 
     // ** padStart
 
-    /// The padStart() method creates a new string by padding this string with
-    /// another slice (multiple times, if needed) until the resulting string
-    /// reaches the given length. The padding is applied from the start of this
-    /// string. If pad_slice is too long to stay within the wanted_len, it will
-    /// be truncated from the end.
+    /// The padStart() method creates a new string by padding this string with another slice (multiple times, if needed)
+    /// until the resulting string reaches the given length. The padding is applied from the start of this string. If
+    /// pad_slice is too long to stay within the wanted_len, it will be truncated from the end.
     pub fn padStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) anyerror!JStringUnmanaged {
         if (this.len() >= wanted_len) {
             return this.clone(allocator);
@@ -687,8 +682,7 @@ pub const JStringUnmanaged = struct {
         };
     }
 
-    /// JString version of padStart, accept pad_string (*const JStringUnmanaged)
-    /// instead of slice.
+    /// JString version of padStart, accept pad_string (*const JStringUnmanaged) instead of slice.
     pub inline fn padStartJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) anyerror!JStringUnmanaged {
         return this.padStart(allocator, wanted_len, pad_string.slice);
     }
@@ -896,13 +890,10 @@ pub const JStringUnmanaged = struct {
 
     // ** slice
 
-    /// Slice part of current string and return a new copy with content
-    /// [index_start, index_end). Both `index_start` and `index_end` can be
-    /// positive or negative numbers. When is positive, means the forward
-    /// location from string beginning; when is negative, means the backward
-    /// location from string ending. Example: if `s` contains
-    /// "hello", `s.slice(allocator, 1, -1)` will return a new string with
-    /// content "ell"
+    /// Slice part of current string and return a new copy with content `[index_start, index_end)`. Both `index_start`
+    /// and `index_end` can be positive or negative numbers. When is positive, means the forward location from string
+    /// beginning; when is negative, means the backward location from string ending. Example: if `s` contains `"hello"`,
+    /// `s.slice(allocator, 1, -1)` will return a new string with content `"ell"`.
     pub fn slice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: isize, index_end: isize) anyerror!JStringUnmanaged {
         const uindex_start = brk: {
             if (index_start >= 0) {
@@ -977,8 +968,8 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    /// split by simple seperator([]const u8). If you need to split by white spaces, use
-    /// `splitByWhiteSpace`, or even more advanced `splitByRegex` (need to enable pcre support)
+    /// split by simple seperator([]const u8). If you need to split by white spaces, use `splitByWhiteSpace`, or
+    /// even more advanced `splitByRegex` (need to enable pcre support)
     pub fn split(this: *JStringUnmanaged, allocator: std.mem.Allocator, seperator: []const u8, limit: isize) anyerror![]JStringUnmanaged {
         const real_limit = brk: {
             if (limit < 0) {
@@ -1223,8 +1214,7 @@ pub const JStringUnmanaged = struct {
 
     // ** trim
 
-    /// essentially =trimStart(trimEnd()). All temp strings produced in steps
-    /// are deinited.
+    /// essentially =trimStart(trimEnd()). All temp strings produced in steps are deinited.
     pub fn trim(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         const str1 = try this.trimStart(allocator);
         if (str1.len() == 0) {
@@ -1237,8 +1227,8 @@ pub const JStringUnmanaged = struct {
 
     // ** trimEnd
 
-    /// trim blank chars(' ', '\t', '\n' and '\r') from the end. If there is
-    /// nothing to trim it will return a clone of original string.
+    /// trim blank chars(' ', '\t', '\n' and '\r') from the end. If there is nothing to trim it will return a clone of
+    /// original string.
     pub fn trimEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         const first_nonblank = brk: {
             var i = this.str_slice.len - 1;
@@ -1269,8 +1259,8 @@ pub const JStringUnmanaged = struct {
 
     // ** trimStart
 
-    /// trim blank chars(' ', '\t', '\n' and '\r') from beginning. If there is
-    /// nothing to trim it will return a clone of original string.
+    /// trim blank chars(' ', '\t', '\n' and '\r') from beginning. If there is nothing to trim it will return a clone
+    /// of original string.
     pub fn trimStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
         const first_nonblank = brk: {
             for (this.str_slice, 0..) |char, i| {
@@ -1300,8 +1290,7 @@ pub const JStringUnmanaged = struct {
 
 fn defineArenaAllocator(comptime enable: bool) type {
     if (enable) {
-        // A copy of zig's std.heap.ArenaAllocator for possibility to optimise for
-        // string usage.
+        // A copy of zig's std.heap.ArenaAllocator for possibility to optimise for string usage.
         // This allocator takes an existing allocator, wraps it, and provides an
         // interface where you can allocate without freeing, and then free it all
         // together.
@@ -1992,8 +1981,8 @@ fn _bufPrintSpecifier(comptime type_info: std.builtin.Type, comptime fmt_buf: []
     }
 }
 
-// take advantage of both matched results and group matched results are sorted based on start
-// when taking out of pcre, do a merge algorithm here
+// take advantage of both matched results and group matched results are sorted based on start when taking out of pcre,
+// do a merge algorithm here
 const _MatchedGapIterator = struct {
     const Gap = struct {
         start: usize,
