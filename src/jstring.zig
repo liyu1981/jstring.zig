@@ -579,8 +579,23 @@ pub const JStringUnmanaged = struct {
         @compileError("Not implemented! Does localeCompare make sense in zig?");
     }
 
-    // TODO match
-    // TODO matchAll
+    // ** match
+
+    /// thin wrap of Regex's match against this.str_slice as search subject
+    pub inline fn match(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
+        var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
+        try re.match(allocator, this.str_slice, offset, fetch_results, match_options);
+        return re;
+    }
+
+    // ** matchAll
+
+    /// this wrap of Regex's matchAll against this.str_slice as search subject
+    pub inline fn matchAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
+        var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
+        try re.matchAll(allocator, this.str_slice, offset, match_options);
+        return re;
+    }
 
     // ** normalize
 
@@ -691,7 +706,17 @@ pub const JStringUnmanaged = struct {
     }
 
     // TODO replace
-    // TODO search
+
+    // ** search
+
+    /// This function is searching by regex so it requires allocator. For simple search
+    /// use `indexOf`
+    pub fn search(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8) anyerror!isize {
+        _ = this;
+        _ = allocator;
+        _ = pattern;
+        @compileError("TODO!");
+    }
 
     // ** slice
 
@@ -776,6 +801,8 @@ pub const JStringUnmanaged = struct {
         }
     }
 
+    /// split by simple seperator([]const u8). If you need to split by white spaces, use
+    /// `splitByWhiteSpace`, or even more advanced `splitByRegex` (need to enable pcre support)
     pub fn split(this: *JStringUnmanaged, allocator: std.mem.Allocator, seperator: []const u8, limit: isize) anyerror![]JStringUnmanaged {
         const real_limit = brk: {
             if (limit < 0) {
@@ -830,8 +857,7 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    /// Split by ascii whitespaces (" \t\n\r"), or called explode in languages
-    /// like PHP
+    /// Split by ascii whitespaces (" \t\n\r"), or called explode in languages like PHP (which is the best language! :))
     pub inline fn splitByWhiteSpace(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
         return this.explode(allocator, limit);
     }
@@ -1303,6 +1329,80 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 FetchBeforeMatch,
             };
 
+            pub const MatchedResultIterator = struct {
+                const Result = struct {
+                    start: usize,
+                    len: usize,
+                    value: []const u8,
+                };
+
+                maybe_matched_results: ?[]pcre.RegexMatchResult,
+                cur_pos: usize = 0,
+                subject_slice: []const u8,
+
+                pub fn init(regex: *Self, subject: []const u8) MatchedResultIterator {
+                    return MatchedResultIterator{
+                        .maybe_matched_results = regex.getResults(),
+                        .subject_slice = subject,
+                    };
+                }
+
+                pub fn nextResult(this: *MatchedResultIterator) ?Result {
+                    if (this.maybe_matched_results) |matched_results| {
+                        if (this.cur_pos < matched_results.len) {
+                            const start = matched_results[this.cur_pos].start;
+                            const len = matched_results[this.cur_pos].len;
+                            this.cur_pos += 1;
+                            return Result{
+                                .start = start,
+                                .len = len,
+                                .value = this.subject_slice[start .. start + len],
+                            };
+                        } else return null;
+                    } else return null;
+                }
+            };
+
+            pub const MatchedGroupResultIterator = struct {
+                const Result = struct {
+                    start: usize,
+                    len: usize,
+                    name: []const u8,
+                    value: []const u8,
+                };
+
+                maybe_group_results: []pcre.RegexNamedGroupResult,
+                cur_pos: usize,
+                subject_slice: []const u8,
+
+                pub fn init(regex: *Self, subject: []const u8) MatchedGroupResultIterator {
+                    return MatchedGroupResultIterator{
+                        .maybe_group_results = regex.getGroupResults(),
+                        .subject_slice = subject,
+                    };
+                }
+
+                pub fn nextResult(this: *MatchedResultIterator) ?Result {
+                    if (this.maybe_group_results) |group_results| {
+                        if (this.cur_pos < group_results.len) {
+                            const start = group_results[this.cur_pos].start;
+                            const len = group_results[this.cur_pos].len;
+                            const name = group_results[this.cur_pos].name[0..group_results[this.cur_pos].name_len];
+                            this.cur_pos += 1;
+                            return Result{
+                                .start = start,
+                                .len = len,
+                                .name = name,
+                                .value = this.subject_slice[start .. start + len],
+                            };
+                        } else return null;
+                    } else return null;
+                }
+            };
+
+            pub const DefaultRegexOptions: u32 = 0;
+            pub const DefaultMatchOptions: u32 = 0;
+
             context_: *pcre.RegexContext = undefined,
             matched_results_list: MatchedResultsList = undefined,
             matched_group_results_list: MatchedGroupResultsList = undefined,
@@ -1333,11 +1433,19 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 } else return null;
             }
 
+            pub inline fn getResultsIterator(this: *Self, subject: []const u8) MatchedResultIterator {
+                return MatchedResultIterator.init(this, subject);
+            }
+
             pub inline fn getGroupResults(this: *const Self) ?[]pcre.RegexNamedGroupResult {
                 if (this.context_.matched_group_count > 0) {
                     const c = @as(usize, @intCast(this.context_.matched_group_count));
                     return this.context_.matched_group_results[0..c];
                 } else return null;
+            }
+
+            pub inline fn getGroupResultsIterator(this: *Self, subject: []const u8) MatchedGroupResultIterator {
+                return MatchedGroupResultIterator.init(this, subject);
             }
 
             pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
@@ -2031,6 +2139,33 @@ test "RegexUnmanged" {
                 try testing.expect(mgr[1].start == 6);
                 try testing.expect(mgr[1].len == 5);
             }
+        }
+    }
+}
+
+test "match/matchAll" {
+    if (enable_pcre) {
+        var arena = ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+            var re = try str1.match(arena.allocator(), "hel+o", 0, true, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
+            try testing.expect(re.succeed());
+            var it = re.getResultsIterator(str1.str_slice);
+            var maybe_result = it.nextResult();
+            if (maybe_result) |r| {
+                try testing.expectEqual(r.start, 0);
+                try testing.expectEqual(r.len, 5);
+                try testing.expectEqualSlices(u8, r.value, "hello");
+            }
+            maybe_result = it.nextResult();
+            if (maybe_result) |r| {
+                try testing.expectEqual(r.start, 6);
+                try testing.expectEqual(r.len, 5);
+                try testing.expectEqualSlices(u8, r.value, "hello");
+            }
+            maybe_result = it.nextResult();
+            try testing.expectEqual(maybe_result, null);
         }
     }
 }
