@@ -7,8 +7,8 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug test",
-      "program": "${workspaceFolder}/zig-out/bin/my-test",
+      "name": "Debug pcre test",
+      "program": "${workspaceFolder}/zig-out/bin/pcre_test",
       "args": [],
       "cwd": "${workspaceFolder}"
     }

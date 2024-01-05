@@ -1,4 +1,5 @@
-zig.sh
+cov
+doc
 
 # Created by https://www.toptal.com/developers/gitignore/api/macos,zig
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,zig

@@ -16,6 +16,13 @@
 const enable_arena_allocator: bool = true;
 const enable_pcre: bool = true;
 
+// TODOs:
+//   * managed
+//   * complete tests
+//   * arena allocator
+//   * benchmark
+//   * README + doc
+
 const std = @import("std");
 const testing = std.testing;
 
@@ -25,12 +32,18 @@ pub const ArenaAllocator = defineArenaAllocator(enable_arena_allocator);
 
 pub const RegexUnmanaged = defineRegexUnmanaged(enable_pcre);
 
-pub const JStringUnmanaged = struct {
-    const JStringUnmanagedError = error{
-        UnicodeDecodeError,
-        RegexMatchFailed,
-    };
+pub const JStringError = error{
+    UnicodeDecodeError,
+    RegexBadPattern,
+    RegexFetchBeforeMatch,
+    RegexMatchFailed,
+    // Usually reported when use with splitByRegex/replaceByRegex, indicating that the pattern used will result in
+    // overlapped matches so that we can determinstically know how to split/replace. The possible reason is the pattern
+    // is using named group. Or you can debug your regex with `RegexUnmanaged.matchAll` or use https://regex101.com/
+    RegexMatchOverlapped,
+};
 
+pub const JStringUnmanaged = struct {
     pub const U8Iterator = struct {
         const Self = @This();
 
@@ -334,7 +347,7 @@ pub const JStringUnmanaged = struct {
             if (it.nextCodepoint()) |uc| {
                 unicode_char = uc;
             } else {
-                return JStringUnmanagedError.UnicodeDecodeError;
+                return JStringError.UnicodeDecodeError;
             }
             if (i >= char_pos) {
                 break;
@@ -817,7 +830,7 @@ pub const JStringUnmanaged = struct {
                     // probably it is also fast enough
                     var gap_it = _MatchedGapIterator.init(&re, this.str_slice);
                     var count: usize = 0;
-                    while (gap_it.nextGap()) |g| {
+                    while (try gap_it.nextGap()) |g| {
                         if (g.start == 0) {
                             // gap is not overlapping, so simply check every one,
                             // there must be one at most start at 0
@@ -838,13 +851,13 @@ pub const JStringUnmanaged = struct {
                     defer allocator.free(gaps);
                     var gap_it = _MatchedGapIterator.init(&re, this.str_slice);
                     var count: usize = 0;
-                    while (gap_it.nextGap()) |g| {
+                    while (try gap_it.nextGap()) |g| {
                         gaps[count] = _MatchedGapIterator.Gap{ .start = g.start, .len = g.len };
                         count += 1;
                     }
                     return this._joinGapsWithSlice(allocator, gaps, replacement_slice);
                 }
-            } else return error.RegexMatchFailed;
+            } else return JStringError.RegexMatchFailed;
         } else {
             @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
         }
@@ -968,29 +981,38 @@ pub const JStringUnmanaged = struct {
     // ** split
 
     /// pay attention that this function will not consider spaces in non-ascii.
-    fn _splitToUtf8Chars(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: usize) anyerror![]JStringUnmanaged {
-        var result_jstrings = try allocator.alloc(JStringUnmanaged, limit);
-        var result_count: usize = 0;
+    fn _splitToUtf8Chars(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: usize, comptime with_spaces: bool) anyerror![]JStringUnmanaged {
         if (limit == 0) {
-            return result_jstrings;
+            return try allocator.alloc(JStringUnmanaged, 0);
         }
 
-        _ = try this.utf8Len(); // force for a utf8_view
+        var result_count: usize = 0;
+        const utf8_len = try this.utf8Len(); // force for a utf8_view
+        const real_limit = if (limit < utf8_len) limit else utf8_len;
+        var result_jstrings = try allocator.alloc(JStringUnmanaged, real_limit);
         var it = try this.utf8Iterator();
         while (it.nextCodepoint()) |code_point| {
-            switch (code_point) {
-                ' ', '\t', '\n', '\r' => continue,
-                else => {
-                    result_jstrings[result_count] = try JStringUnmanaged.newFromFormat(allocator, "{u}", .{code_point});
-                    result_count += 1;
-                    if (result_count >= limit) {
-                        break;
-                    }
-                },
+            if (with_spaces) {
+                result_jstrings[result_count] = try JStringUnmanaged.newFromFormat(allocator, "{u}", .{code_point});
+                result_count += 1;
+                if (result_count >= real_limit) {
+                    break;
+                }
+            } else {
+                switch (code_point) {
+                    ' ', '\t', '\n', '\r' => continue,
+                    else => {
+                        result_jstrings[result_count] = try JStringUnmanaged.newFromFormat(allocator, "{u}", .{code_point});
+                        result_count += 1;
+                        if (result_count >= real_limit) {
+                            break;
+                        }
+                    },
+                }
             }
         }
 
-        if (result_count == limit) {
+        if (result_count == real_limit) {
             return result_jstrings;
         } else {
             defer allocator.free(result_jstrings);
@@ -1016,9 +1038,7 @@ pub const JStringUnmanaged = struct {
 
         if (seperator.len == 0) {
             // Well this is quite stupid, but let us still try to cover it.
-            // Essentially it creates a string for each char (utf8) and remove
-            // all spaces
-            return this._splitToUtf8Chars(allocator, real_limit);
+            return this._splitToUtf8Chars(allocator, if (real_limit < this.str_slice.len) real_limit else this.str_slice.len, true);
         }
 
         var result_jstrings = try allocator.alloc(JStringUnmanaged, real_limit);
@@ -1069,7 +1089,8 @@ pub const JStringUnmanaged = struct {
         if (enable_pcre) {
             const real_limit = brk: {
                 if (limit < 0) {
-                    break :brk this.str_slice.len;
+                    // most will be +1, like "hello".split(/./) => (6) ['', '', '', '', '', '']
+                    break :brk this.str_slice.len + 1;
                 } else {
                     break :brk @as(usize, @intCast(limit));
                 }
@@ -1089,7 +1110,7 @@ pub const JStringUnmanaged = struct {
                     // probably it is also fast enough
                     var gap_it = _MatchedGapIterator.init(&re, this.str_slice);
                     var count: usize = 0;
-                    while (gap_it.nextGap()) |g| {
+                    while (try gap_it.nextGap()) |g| {
                         if (g.start == 0) {
                             // gap is not overlapping, so simply check every one,
                             // there must be one at most start at 0
@@ -1109,10 +1130,13 @@ pub const JStringUnmanaged = struct {
                     const jstrings_count = brk2: {
                         const count_by_gap = brk: {
                             if (first_gap_start_from_zero and last_gap_end_in_end) {
-                                // |<gap>|
-                                break :brk 1;
-                            } else if (first_gap_start_from_zero or last_gap_end_in_end) {
-                                // |<gap>..<gap>..| or |..<gap>..<gap>|
+                                // |<gap>..<gap>..<gap>|
+                                break :brk gap_count + 1;
+                            } else if (first_gap_start_from_zero) {
+                                // |<gap>..<gap>..|
+                                break :brk gap_count + 1;
+                            } else if (last_gap_end_in_end) {
+                                // |..<gap>..<gap>|
                                 break :brk gap_count;
                             } else {
                                 // |..<gap>..<gap>..<gap>..|
@@ -1121,46 +1145,29 @@ pub const JStringUnmanaged = struct {
                         };
                         break :brk2 if (real_limit < count_by_gap) real_limit else count_by_gap;
                     };
-                    if (jstrings_count == 1) {
-                        return this._cloneAsArray(allocator);
-                    }
                     var result_jstrings = try allocator.alloc(JStringUnmanaged, jstrings_count);
                     var count: usize = 0;
                     var slice_offset: usize = 0;
-                    var checked_gap_count: usize = 0;
                     var gap_it = _MatchedGapIterator.init(&re, this.str_slice);
-                    while (gap_it.nextGap()) |g| {
+                    while (try gap_it.nextGap()) |g| {
                         if (count >= jstrings_count) {
                             break;
                         }
-                        // no more |<gap>| case as we returned just before this
-                        if (first_gap_start_from_zero) {
-                            // |<gap>..<gap>..|
-                            if (checked_gap_count == 0) {
-                                checked_gap_count += 1;
-                                slice_offset = g.start + g.len;
-                                continue;
-                            }
-                            result_jstrings[count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[slice_offset..g.start]);
-                            slice_offset = g.start + g.len;
-                        } else {
-                            // |..<gap>..<gap>| or |..<gap>..<gap>..<gap>..|
-                            result_jstrings[count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[slice_offset..g.start]);
-                            slice_offset = g.start + g.len;
-                        }
+                        // |<gap>..<gap>..| or
+                        // |..<gap>..<gap>| or |..<gap>..<gap>..<gap>..|
+                        // no matter what, we can do this
+                        result_jstrings[count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[slice_offset..g.start]);
+                        slice_offset = g.start + g.len;
                         count += 1;
-                        checked_gap_count += 1;
                     }
-                    if (count < jstrings_count and !last_gap_end_in_end) {
-                        // |<gap>..<gap>..|
-                        // or
-                        // |..<gap>..<gap>..<gap>..|
-                        // get the last piece done
+                    if (count < jstrings_count) {
+                        // |<gap>| or |..<gap>..<gap>..<gap>..| or |<gap>..<gap>..|
+                        // still missing one so get the last piece done
                         result_jstrings[count] = try JStringUnmanaged.newFromSlice(allocator, this.str_slice[slice_offset..]);
                     }
                     return result_jstrings;
                 }
-            } else return this._cloneAsArray(allocator);
+            } else return JStringError.RegexMatchFailed;
         } else {
             @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
         }
@@ -1622,9 +1629,6 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             const Self = @This();
             const MatchedResultsList = std.SinglyLinkedList([]pcre.RegexMatchResult);
             const MatchedGroupResultsList = std.SinglyLinkedList([]pcre.RegexNamedGroupResult);
-            const RegexError = error{
-                FetchBeforeMatch,
-            };
 
             pub const MatchedResultIterator = struct {
                 const Result = struct {
@@ -1746,6 +1750,9 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             }
 
             pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+                if (pattern.len == 0) {
+                    return JStringError.RegexBadPattern;
+                }
                 var context_ = try allocator.create(pcre.RegexContext);
                 context_.regex_options = regex_options;
                 context_.match_options = match_options;
@@ -1828,7 +1835,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                         return this.context_.origin_offset;
                     }
                 } else {
-                    return error.FetchBeforeMatch;
+                    return JStringError.FetchBeforeMatch;
                 }
             }
 
@@ -2047,7 +2054,7 @@ const _MatchedGapIterator = struct {
         };
     }
 
-    pub fn nextGap(this: *_MatchedGapIterator) ?Gap {
+    pub fn nextGap(this: *_MatchedGapIterator) anyerror!?Gap {
         if (this.it_should_fetch) {
             this.maybe_result = this.it.nextResult();
             this.it_should_fetch = false;
@@ -2081,11 +2088,13 @@ const _MatchedGapIterator = struct {
         return null;
     }
 
-    fn _nextGapFromIt(this: *_MatchedGapIterator) ?Gap {
+    fn _nextGapFromIt(this: *_MatchedGapIterator) anyerror!?Gap {
         if (this.maybe_result) |r| {
             this.it_should_fetch = true;
             if (this.last_start == r.start and this.last_len == r.len) {
                 return this.nextGap();
+            } else if (this.last_start + this.last_len > r.start) {
+                return JStringError.RegexMatchOverlapped;
             } else {
                 this.last_start = r.start;
                 this.last_len = r.len;
@@ -2098,11 +2107,13 @@ const _MatchedGapIterator = struct {
         unreachable;
     }
 
-    fn _nextGapFromGroupIt(this: *_MatchedGapIterator) ?Gap {
+    fn _nextGapFromGroupIt(this: *_MatchedGapIterator) anyerror!?Gap {
         if (this.maybe_group_result) |gr| {
             this.group_it_should_fetch = true;
             if (this.last_start == gr.start and this.last_len == gr.len) {
                 return this.nextGap();
+            } else if (this.last_start + this.last_len > gr.start) {
+                return JStringError.RegexMatchOverlapped;
             } else {
                 this.last_start = gr.start;
                 this.last_len = gr.len;
@@ -2143,8 +2154,16 @@ fn _kmpBuildFailureTable(allocator: std.mem.Allocator, needle_slice: []const u8)
     return t;
 }
 
-fn _testReturnErrorUnion(value_or_error: bool, value: i32, err: anyerror) !i32 {
+fn _testCreateErrorUnion(value_or_error: bool, comptime T: type, value: T, err: anyerror) anyerror!T {
     return if (value_or_error) value else err;
+}
+
+fn _testIsError(comptime T: type, maybe_value: anyerror!T, expected_error: anyerror) bool {
+    if (maybe_value) |_| {
+        return false;
+    } else |err| {
+        return err == expected_error;
+    }
 }
 
 // >>> all your tests belong to me and list in below <<<
@@ -2278,7 +2297,7 @@ test "concat" {
     const str5 = try str1.concatFormat(arena.allocator(), "{s}", .{" jstring"});
     try testing.expect(str5.eqlSlice("hello,world jstring"));
     const optional_6: ?i32 = 6;
-    const error1 = _testReturnErrorUnion(false, 0, error.OutOfMemory);
+    const error1 = _testCreateErrorUnion(false, i32, 0, error.OutOfMemory);
     const str6 = try str1.concatTuple(arena.allocator(), .{
         " jstring",
         5,
@@ -2392,6 +2411,8 @@ test "padStart/padEnd" {
         try testing.expect(str2.eqlSlice("welcomehello"));
         const str3 = try str1.padStart(arena.allocator(), 15, "welcome");
         try testing.expect(str3.eqlSlice("omewelcomehello"));
+        const str4 = try str1.padStart(arena.allocator(), 4, "welcome");
+        try testing.expect(str4.eqlSlice("hello"));
     }
     {
         const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
@@ -2399,6 +2420,8 @@ test "padStart/padEnd" {
         try testing.expect(str2.eqlSlice("helloworld"));
         const str3 = try str1.padEnd(arena.allocator(), 13, "world");
         try testing.expect(str3.eqlSlice("helloworldwor"));
+        const str4 = try str1.padEnd(arena.allocator(), 4, "welcome");
+        try testing.expect(str4.eqlSlice("hello"));
     }
 }
 
@@ -2430,6 +2453,8 @@ test "indexOf/lastIndexOf/includes" {
         try testing.expectEqual(str2.fastLastIndexOf(arena.allocator(), "", 6), 21);
         try testing.expect(str2.fastIncludes(arena.allocator(), "hello", 0));
         try testing.expect(!str2.fastIncludes(arena.allocator(), "nothere", 0));
+        try testing.expectEqual(str2.fastIndexOf(arena.allocator(), "hello", 20), -1);
+        try testing.expectEqual(str2.fastIndexOf(arena.allocator(), "hello", 24), -1);
     }
 }
 
@@ -2501,10 +2526,27 @@ test "split" {
         try testing.expect(strings2[0].eqlSlice("hello"));
         var str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "\thello 💯 world ");
         var strings3 = try str2.split(arena.allocator(), "", -1);
-        try testing.expectEqual(strings3.len, 11);
-        try testing.expect(strings3[0].eqlSlice("h"));
-        try testing.expect(strings3[5].eqlSlice("💯"));
-        try testing.expect(strings3[10].eqlSlice("d"));
+        try testing.expectEqual(strings3.len, 15);
+        try testing.expect(strings3[0].eqlSlice("\t"));
+        try testing.expect(strings3[7].eqlSlice("💯"));
+        try testing.expect(strings3[13].eqlSlice("d"));
+    }
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+        var strings = try str1.split(arena.allocator(), "", -1);
+        try testing.expectEqual(strings.len, 5);
+        try testing.expect(strings[0].eqlSlice("h"));
+        try testing.expect(strings[1].eqlSlice("e"));
+        try testing.expect(strings[2].eqlSlice("l"));
+        try testing.expect(strings[3].eqlSlice("l"));
+        try testing.expect(strings[4].eqlSlice("o"));
+        strings = try str1.split(arena.allocator(), "", 3);
+        try testing.expectEqual(strings.len, 3);
+        try testing.expect(strings[0].eqlSlice("h"));
+        try testing.expect(strings[1].eqlSlice("e"));
+        try testing.expect(strings[2].eqlSlice("l"));
+        strings = try str1.split(arena.allocator(), "", 0);
+        try testing.expectEqual(strings.len, 0);
     }
 }
 
@@ -2512,6 +2554,10 @@ test "RegexUnmanged" {
     if (enable_pcre) {
         var arena = ArenaAllocator.init(testing.allocator);
         defer arena.deinit();
+        {
+            const re = RegexUnmanaged.init(arena.allocator(), "", 0, 0);
+            try testing.expect(_testIsError(RegexUnmanaged, re, JStringError.RegexBadPattern));
+        }
         {
             var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
             try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
@@ -2584,20 +2630,20 @@ test "match/matchAll" {
             var re = try str1.match(arena.allocator(), "hel+o", 0, true, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
             try testing.expect(re.succeed());
             var it = re.getResultsIterator(str1.str_slice);
-            var maybe_result = it.nextResult();
+            const maybe_result = it.nextResult();
             if (maybe_result) |r| {
                 try testing.expectEqual(r.start, 0);
                 try testing.expectEqual(r.len, 5);
                 try testing.expectEqualSlices(u8, r.value, "hello");
             }
-            maybe_result = it.nextResult();
-            if (maybe_result) |r| {
+            const maybe_result2 = it.nextResult();
+            if (maybe_result2) |r| {
                 try testing.expectEqual(r.start, 6);
                 try testing.expectEqual(r.len, 5);
                 try testing.expectEqualSlices(u8, r.value, "hello");
             }
-            maybe_result = it.nextResult();
-            try testing.expectEqual(maybe_result, null);
+            const maybe_result3 = it.nextResult();
+            try testing.expectEqual(maybe_result3, null);
         }
     }
 }
@@ -2634,15 +2680,55 @@ test "splitByRegex" {
             try testing.expect(results[2].eqlSlice("o,wor"));
             try testing.expect(results[3].eqlSlice("d"));
             results = try str1.splitByRegex(arena.allocator(), "he", 0, -1);
-            try testing.expectEqual(results.len, 2);
-            try testing.expect(results[0].eqlSlice("llo,"));
-            try testing.expect(results[1].eqlSlice("llo,world"));
+            try testing.expectEqual(results.len, 3);
+            try testing.expect(results[0].eqlSlice(""));
+            try testing.expect(results[1].eqlSlice("llo,"));
+            try testing.expect(results[2].eqlSlice("llo,world"));
             results = try str1.splitByRegex(arena.allocator(), "lo|d", 0, -1);
             try testing.expectEqual(results.len, 3);
             try testing.expect(results[0].eqlSlice("hel"));
             try testing.expect(results[1].eqlSlice(",hel"));
             try testing.expect(results[2].eqlSlice(",worl"));
-            // TODO: add more group match test cases
+        }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+            var results = try str1.splitByRegex(arena.allocator(), "(?<L>l+)", 0, -1);
+            try testing.expectEqual(results.len, 4);
+            try testing.expect(results[0].eqlSlice("he"));
+            try testing.expect(results[1].eqlSlice("o,he"));
+            try testing.expect(results[2].eqlSlice("o,wor"));
+            try testing.expect(results[3].eqlSlice("d"));
+        }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+            const r = str1.splitByRegex(arena.allocator(), "he(?<L>l+)", 0, -1);
+            try testing.expect(_testIsError([]JStringUnmanaged, r, JStringError.RegexMatchOverlapped));
+        }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+            // stupid way of splitting every char into string, but should work
+            const results = try str1.splitByRegex(arena.allocator(), ".", 0, -1);
+            try testing.expectEqual(results.len, 6);
+            try testing.expect(results[0].eqlSlice(""));
+            try testing.expect(results[1].eqlSlice(""));
+            try testing.expect(results[2].eqlSlice(""));
+            try testing.expect(results[3].eqlSlice(""));
+            try testing.expect(results[4].eqlSlice(""));
+            try testing.expect(results[5].eqlSlice(""));
+        }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hhoh");
+            const results = try str1.splitByRegex(arena.allocator(), "h", 0, -1);
+            try testing.expectEqual(results.len, 4);
+            try testing.expect(results[0].eqlSlice(""));
+            try testing.expect(results[1].eqlSlice(""));
+            try testing.expect(results[2].eqlSlice("o"));
+            try testing.expect(results[3].eqlSlice(""));
+        }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+            const results = str1.splitByRegex(arena.allocator(), "", 0, -1);
+            try testing.expect(_testIsError([]JStringUnmanaged, results, JStringError.RegexBadPattern));
         }
     }
 }
@@ -2665,6 +2751,20 @@ test "replace/replaceAll/replaceByRegex/replaceAllByRegex" {
             str2 = try str1.replaceAllByRegex(arena.allocator(), "hel+o", "jstring");
             try testing.expect(str2.eqlSlice("jstring,jstring,world"));
         }
-        // TODO: add more group match test cases
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+            const str2 = try str1.replaceAllByRegex(arena.allocator(), "(?<L>l+)", "L");
+            try testing.expect(str2.eqlSlice("heLo,heLo,worLd"));
+        }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
+            const r = str1.replaceAllByRegex(arena.allocator(), "he(?<L>l+)", "");
+            try testing.expect(_testIsError(JStringUnmanaged, r, JStringError.RegexMatchOverlapped));
+        }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+            const r = str1.replaceAllByRegex(arena.allocator(), "", "L");
+            try testing.expect(_testIsError(JStringUnmanaged, r, JStringError.RegexBadPattern));
+        }
     }
 }
