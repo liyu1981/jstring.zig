@@ -17,7 +17,6 @@ const enable_arena_allocator: bool = true;
 const enable_pcre: bool = true;
 
 // TODOs:
-//   * managed
 //   * complete tests
 //   * arena allocator
 //   * benchmark
@@ -27,10 +26,6 @@ const std = @import("std");
 const testing = std.testing;
 
 const pcre = if (enable_pcre) @import("pcre_binding.zig") else undefined;
-
-pub const ArenaAllocator = defineArenaAllocator(enable_arena_allocator);
-
-pub const RegexUnmanaged = defineRegexUnmanaged(enable_pcre);
 
 pub const JStringError = error{
     UnicodeDecodeError,
@@ -42,6 +37,539 @@ pub const JStringError = error{
     // is using named group. Or you can debug your regex with `RegexUnmanaged.matchAll` or use https://regex101.com/
     RegexMatchOverlapped,
 };
+
+pub const ArenaAllocator = defineArenaAllocator(enable_arena_allocator);
+
+// managed versions
+//   just very thin wrap around unmanaged versions, where has all real implemenats
+
+pub const Regex = defineRegex(enable_pcre);
+
+pub const JString = struct {
+    allocator: std.mem.Allocator,
+    unmanaged: JStringUnmanaged,
+
+    pub const U8Iterator = JStringUnmanaged.U8Iterator;
+    pub const U8ReverseIterator = JStringUnmanaged.U8ReverseIterator;
+
+    pub fn deinit(this: *JString) void {
+        this.unmanaged.deinit(this.allocator);
+    }
+
+    pub inline fn newEmpty(allocator: std.mem.Allocator) anyerror!JString {
+        return JString{
+            .allocator = allocator,
+            .unmanaged = try JStringUnmanaged.newEmpty(allocator),
+        };
+    }
+
+    pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) anyerror!JString {
+        return JString{
+            .allocator = allocator,
+            .unmanaged = try JStringUnmanaged.newFromSlice(allocator, string_slice),
+        };
+    }
+
+    pub fn newFromJString(that: JString) anyerror!JString {
+        return JString{
+            .allocator = that.allocator,
+            .unmanaged = try JStringUnmanaged.newFromJStringUnmanaged(that.allocator, that.unmanaged),
+        };
+    }
+
+    pub fn newFromFormat(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) anyerror!JString {
+        return JString{
+            .allocator = allocator,
+            .unmanaged = try JStringUnmanaged.newFromFormat(allocator, fmt, args),
+        };
+    }
+
+    pub fn newFromTuple(allocator: std.mem.Allocator, rest_items: anytype) anyerror!JString {
+        return JString{
+            .allocator = allocator,
+            .unmanaged = try JStringUnmanaged.newFromTuple(allocator, rest_items),
+        };
+    }
+
+    pub inline fn newFromNumber(allocator: std.mem.Allocator, comptime T: type, value: T) anyerror!JString {
+        return JString{
+            .allocator = allocator,
+            .unmanaged = try JStringUnmanaged.newFromNumber(allocator, T, value),
+        };
+    }
+
+    pub fn newFromStringify(allocator: std.mem.Allocator, value: anytype) anyerror!JString {
+        return JString{
+            .allocator = allocator,
+            .unmanaged = try JStringUnmanaged.newFromStringify(allocator, value),
+        };
+    }
+
+    pub fn newFromStringifyWithOptions(allocator: std.mem.Allocator, value: anytype, options: std.json.StringifyOptions) anyerror!JString {
+        return JString{
+            .allocator = allocator,
+            .unmanaged = try JStringUnmanaged.newFromStringifyWithOptions(allocator, value, options),
+        };
+    }
+
+    pub inline fn format(
+        this: *const JStringUnmanaged,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        try this.unmanaged.format(fmt, options, writer);
+    }
+
+    pub inline fn len(this: *const JString) usize {
+        return this.unmanaged.len();
+    }
+
+    pub inline fn utf8Len(this: *JString) anyerror!usize {
+        return this.unmanaged.utf8Len();
+    }
+
+    pub inline fn clone(this: *const JString) anyerror!JString {
+        return this.unmanaged.clone(this.allocator);
+    }
+
+    pub inline fn isEmpty(this: *const JString) bool {
+        return this.unmanaged.isEmpty();
+    }
+
+    pub inline fn eqlSlice(this: *const JString, string_slice: []const u8) bool {
+        return this.unmanaged.eqlSlice(string_slice);
+    }
+
+    pub inline fn eqlJStringUmanaged(this: *const JString, that: JString) bool {
+        return this.eqlSlice(that.str_slice);
+    }
+
+    pub inline fn explode(this: *const JString, limit: isize) anyerror![]JString {
+        const unmanaged_strings = try this.unmanaged.explode(limit, this.allocator);
+        const strings = try this.allocator.alloc(JString, unmanaged_strings.len);
+        for (0..unmanaged_strings.len) |i| {
+            strings[i] = JString{
+                .allocator = this.allocator,
+                .unmanaged = unmanaged_strings[i],
+            };
+        }
+        return strings;
+    }
+
+    // ** iterator
+
+    pub inline fn iterator(this: *const JString) U8Iterator {
+        return this.unmanaged.iterator();
+    }
+
+    pub inline fn reverseIterator(this: *const JString) U8ReverseIterator {
+        return this.unmanaged.reverseIterator();
+    }
+
+    pub inline fn utf8Iterator(this: *JString) anyerror!std.unicode.Utf8Iterator {
+        return this.unmanaged.utf8Iterator();
+    }
+
+    // ** at
+
+    pub inline fn at(this: *JString, index: isize) anyerror!u21 {
+        return this.unmanaged.at(index);
+    }
+
+    // ** charAt
+
+    pub inline fn charAt(this: *const JString, index: isize) anyerror!u8 {
+        return this.unmanaged.charAt(index);
+    }
+
+    // ** charCodeAt
+
+    pub inline fn charCodeAt(this: *const JString, index: isize) anyerror!u21 {
+        _ = this;
+        _ = index;
+        @compileError("charCodeAt does not make sense in zig, please use at or charAt!");
+    }
+
+    // ** codePointAt
+
+    pub inline fn codePointAt(this: *const JString, index: isize) anyerror!u21 {
+        _ = this;
+        _ = index;
+        @compileError("codePointAt does not make sense in zig, please use at or charAt!");
+    }
+
+    // ** concat
+
+    pub inline fn concat(this: *const JString, rest_jstrings: []const JString) anyerror!JString {
+        const unmanaged_rest_jstrings = [rest_jstrings.len]JStringUnmanaged;
+        for (0..rest_jstrings.len) |i| unmanaged_rest_jstrings[i] = rest_jstrings[i].unmanaged;
+        const new_unmanaged = try this.unmanaged.concat(this.allocator, unmanaged_rest_jstrings);
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = new_unmanaged,
+        };
+    }
+
+    pub inline fn concatFormat(this: *const JString, comptime fmt: []const u8, rest_items: anytype) anyerror!JString {
+        const ArgsType = @TypeOf(rest_items);
+        const args_type_info = @typeInfo(ArgsType);
+        if (args_type_info != .Struct) {
+            @compileError("expected tuple or struct argument, found " ++ @typeName(ArgsType));
+        }
+
+        const fields_info = args_type_info.Struct.fields;
+        if (fields_info.len > @typeInfo(u32).Int.bits) {
+            @compileError("32 arguments max are supported per format call");
+        }
+
+        if (rest_items.len == 0) {
+            return this.clone();
+        } else {
+            var rest_items_unmanaged_jstring = try JStringUnmanaged.newFromFormat(this.allocator, fmt, rest_items);
+            defer rest_items_unmanaged_jstring.deinit(this.allocator);
+            var rest_items_jstrings = [1]JString{JString{ .allocator = this.allocator, .unmanaged = rest_items_unmanaged_jstring }};
+            return this.concat(&rest_items_jstrings);
+        }
+    }
+
+    pub inline fn concatTuple(this: *const JString, rest_items: anytype) anyerror!JString {
+        const ArgsType = @TypeOf(rest_items);
+        const args_type_info = @typeInfo(ArgsType);
+        if (args_type_info != .Struct) {
+            @compileError("expected tuple or struct argument, found " ++ @typeName(ArgsType));
+        }
+
+        const fields_info = args_type_info.Struct.fields;
+        if (fields_info.len > @typeInfo(u32).Int.bits) {
+            @compileError("32 arguments max are supported per format call");
+        }
+
+        // max 32 arguments, and each of them will not have long (<8) specifier
+        comptime var fmt_buf: [8 * 32]u8 = undefined;
+        _ = &fmt_buf;
+        comptime var fmt_len: usize = 0;
+        comptime {
+            var fmt_print_slice: []u8 = fmt_buf[0..];
+            for (fields_info) |field_info| {
+                _bufPrintFmt(@typeInfo(field_info.type), &fmt_buf, &fmt_len, &fmt_print_slice);
+            }
+        }
+
+        return this.concatFormat(fmt_buf[0..fmt_len], rest_items);
+    }
+
+    // ** endsWith
+
+    pub inline fn endsWith(this: *const JString, suffix: JString) bool {
+        return this.unmanaged.endsWith(suffix.unmanaged);
+    }
+
+    pub inline fn endsWithSlice(this: *const JString, suffix_slice: []const u8) bool {
+        return this.unmanaged.endsWithSlice(suffix_slice);
+    }
+
+    // ** fromCharCode
+
+    /// zig supports utf-8 natively, use newFromSlice instead.
+    pub inline fn fromCharCode() JString {
+        @compileError("zig supports utf-8 natively, use newFromSlice instead.");
+    }
+
+    // ** fromCodePoint
+
+    /// zig supports utf-8 natively, use newFromSlice instead.
+    pub inline fn fromCodePoint() JString {
+        @compileError("zig supports utf-8 natively, use newFromSlice instead.");
+    }
+
+    // ** includes
+
+    pub inline fn includes(this: *const JString, needle_slice: []const u8, pos: usize) bool {
+        return this.unmanaged.includes(needle_slice, pos);
+    }
+
+    pub inline fn fastIncludes(this: *const JString, needle_slice: []const u8, pos: usize) bool {
+        return this.unmanaged.fastIncludes(this.allocator, needle_slice, pos);
+    }
+
+    // ** indexOf
+
+    pub inline fn indexOf(this: *const JString, needle_slice: []const u8, pos: usize) isize {
+        return this.unmanaged.indexOf(needle_slice, pos);
+    }
+
+    pub inline fn fastIndexOf(this: *const JString, needle_slice: []const u8, pos: usize) anyerror!isize {
+        return this.unmanaged.fastsIndexof(this.allocator, needle_slice, pos);
+    }
+
+    // ** isWellFormed
+
+    pub fn isWellFormed(this: *const JString) bool {
+        return this.unmananged.isWellFormed();
+    }
+
+    // ** lastIndexOf
+
+    pub inline fn lastIndexOf(this: *const JString, needle_slice: []const u8, pos: usize) isize {
+        return this.unmanaged.lastIndexOf(needle_slice, pos);
+    }
+
+    pub inline fn fastLastIndexOf(this: *const JString, needle_slice: []const u8, pos: usize) anyerror!isize {
+        return this.unmanaged.fastLastIndexOf(this.allocator, needle_slice, pos);
+    }
+
+    // ** localeCompare
+
+    pub inline fn localeCompare(this: *const JString) bool {
+        _ = this;
+        @compileError("Not implemented! Does localeCompare make sense in zig?");
+    }
+
+    // ** match
+
+    pub inline fn match(this: *const JString, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) anyerror!Regex {
+        if (enable_pcre) {
+            return this.unmanaged.match(this.allocator, pattern, offset, fetch_results, regex_options, match_options);
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
+    }
+
+    // ** matchAll
+
+    pub inline fn matchAll(this: *const JString, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) anyerror!Regex {
+        if (enable_pcre) {
+            return this.unmanaged.matchAll(this.allocator, pattern, offset, regex_options, match_options);
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
+    }
+
+    // ** normalize
+
+    pub inline fn normalize(this: *const JString) JString {
+        _ = this;
+        @compileError("Not implemented! Does normalize make sense in zig?");
+    }
+
+    // ** padEnd
+
+    pub inline fn padEnd(this: *const JString, wanted_len: usize, pad_slice: []const u8) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.padEnd(this.allocator, wanted_len, pad_slice),
+        };
+    }
+
+    /// JString version of padEnd, accept pad_string (*const JStringUnmanaged) instead of slice.
+    pub inline fn padEndJString(this: *const JString, wanted_len: usize, pad_string: *const JString) anyerror!JString {
+        return this.padEnd(wanted_len, pad_string.unmanaged.str_slice);
+    }
+
+    // ** padStart
+
+    pub inline fn padStart(this: *const JString, wanted_len: usize, pad_slice: []const u8) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.padStart(this.allocator, wanted_len, pad_slice),
+        };
+    }
+
+    pub inline fn padStartJString(this: *const JString, wanted_len: usize, pad_string: *const JString) anyerror!JString {
+        return this.padStart(wanted_len, pad_string.unmanaged.str_slice);
+    }
+
+    // ** raw
+
+    pub inline fn raw() JString {
+        @compileError("zig has no template literals like javascript, use newFromSlice/newFromFormat/newFromTuple instead.");
+    }
+
+    // ** repeat
+
+    pub inline fn repeat(this: *const JString, count: usize) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.repeat(this.allocator, count),
+        };
+    }
+
+    // ** replace
+
+    pub inline fn replace(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.replace(this.allocator, pattern, replacement_slice),
+        };
+    }
+
+    pub inline fn replaceByRegex(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.replaceByRegex(this.allocator, pattern, replacement_slice),
+        };
+    }
+
+    // ** replaceAll
+
+    pub inline fn replaceAll(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.replaceAll(this.allocator, pattern, replacement_slice),
+        };
+    }
+
+    pub inline fn replaceAllByRegex(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
+        return JString{
+            .allocator = this.allcator,
+            .unmanaged = try this.unmanaged.repalceAllByRegex(this.allocator, pattern, replacement_slice),
+        };
+    }
+
+    // ** search
+
+    pub inline fn search(this: *const JString, pattern: []const u8, offset: usize) isize {
+        return this.unmanaged.search(pattern, offset);
+    }
+
+    pub inline fn searchByRegex(this: *const JString, pattern: []const u8, offset: usize) anyerror!isize {
+        if (enable_pcre) {
+            return this.unmanaged.searchByRegex(this.allocator, pattern, offset);
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
+    }
+
+    // ** slice
+
+    pub inline fn slice(this: *const JString, index_start: isize, index_end: isize) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.slice(index_start, index_end),
+        };
+    }
+
+    pub inline fn sliceWithStartOnly(this: *const JString, index_start: isize) anyerror!JString {
+        return this.slice(index_start, @as(isize, @intCast(this.len())));
+    }
+
+    // ** split
+
+    pub inline fn split(this: *JString, seperator: []const u8, limit: isize) anyerror![]JString {
+        const unmanaged_strings = try this.unmanaged.split(this.allocator, seperator, limit);
+        const strings = try this.allocator.alloc(JString, unmanaged_strings.len);
+        for (0..unmanaged_strings.len) |i| strings[i] = JString{
+            .allocator = this.allocator,
+            .unmanaged = unmanaged_strings[i],
+        };
+        return strings;
+    }
+
+    pub inline fn splitByWhiteSpace(this: *JString, limit: isize) anyerror![]JString {
+        return this.explode(limit);
+    }
+
+    pub inline fn splitByRegex(this: *JString, pattern: []const u8, offset: usize, limit: isize) anyerror![]JString {
+        if (enable_pcre) {
+            const unmanaged_strings = try this.unmanaged.splitByRegex(this.allocator, pattern, offset, limit);
+            const strings = try this.allocator.alloc(JString, unmanaged_strings.len);
+            for (0..unmanaged_strings.len) |i| strings[i] = JString{
+                .allocator = this.allocator,
+                .unmanaged = unmanaged_strings[i],
+            };
+            return strings;
+        } else {
+            @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
+        }
+    }
+
+    // ** startsWith
+
+    pub inline fn startsWith(this: *const JString, prefix: JString) bool {
+        return this.startsWithSlice(prefix.unmanaged.str_slice);
+    }
+
+    pub fn startsWithSlice(this: *const JString, prefix_slice: []const u8) bool {
+        return this.unmanaged.startsWithSlice(prefix_slice);
+    }
+
+    // ** toLocaleLowerCase
+
+    pub fn toLocaleLowerCase(this: *const JString) anyerror!JString {
+        _ = this;
+        @compileError("TODO, not yet implemented!");
+    }
+
+    // ** toLocaleUpperCase
+
+    pub fn toLocalUpperCase(this: *const JString) anyerror!JString {
+        _ = this;
+        @compileError("TODO, not yet implemented!");
+    }
+
+    // ** toLowerCase
+
+    pub fn toLowerCase(this: *const JString) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.toLowerCase(this.allocator),
+        };
+    }
+
+    // ** toUpperCase
+
+    pub fn toUpperCase(this: *const JString) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.toUpperCase(this.allocator),
+        };
+    }
+
+    // ** toWellFormed
+
+    pub fn toWellFormed(this: *const JString) void {
+        _ = this;
+        @compileError("toWellFormed does not make sense in zig as zig is u8/utf8 based. No need to use this.");
+    }
+
+    // ** trim
+
+    pub fn trim(this: *const JString) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.trim(this.allocator),
+        };
+    }
+
+    // ** trimEnd
+
+    pub fn trimEnd(this: *const JString) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.trimEnd(this.allocator),
+        };
+    }
+
+    // ** trimStart
+
+    pub fn trimStart(this: *const JString) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.trimStart(this.allocator),
+        };
+    }
+
+    // ** valueOf
+
+    pub inline fn valueOf(this: *const JString) []u8 {
+        return this.unmanaged.str_slice;
+    }
+};
+
+// unmanaged versions: the real deal
+
+pub const RegexUnmanaged = defineRegexUnmanaged(enable_pcre);
 
 pub const JStringUnmanaged = struct {
     pub const U8Iterator = struct {
@@ -698,7 +1226,7 @@ pub const JStringUnmanaged = struct {
 
     /// JString version of padEnd, accept pad_string (*const JStringUnmanaged) instead of slice.
     pub inline fn padEndJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) anyerror!JStringUnmanaged {
-        return this.padEnd(allocator, wanted_len, pad_string.slice);
+        return this.padEnd(allocator, wanted_len, pad_string.str_slice);
     }
 
     // ** padStart
@@ -732,7 +1260,7 @@ pub const JStringUnmanaged = struct {
 
     /// JString version of padStart, accept pad_string (*const JStringUnmanaged) instead of slice.
     pub inline fn padStartJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) anyerror!JStringUnmanaged {
-        return this.padStart(allocator, wanted_len, pad_string.slice);
+        return this.padStart(allocator, wanted_len, pad_string.str_slice);
     }
 
     // ** raw
@@ -1615,6 +2143,100 @@ fn defineArenaAllocator(comptime enable: bool) type {
             pub fn init(child_allocator: std.mem.Allocator) Self {
                 _ = child_allocator;
                 @compileError("disabled by comptime var `enable_arena_allocator`, set it true to enable.");
+            }
+        };
+    }
+}
+
+fn defineRegex(comptime with_pcre: bool) type {
+    if (with_pcre) {
+        return struct {
+            const Self = @This();
+
+            allocator: std.mem.Allocator,
+            unmanaged: RegexUnmanaged,
+
+            const MatchedResultsList = RegexUnmanaged.MatchedResultsList;
+            const MatchedGroupResultsList = RegexUnmanaged.MatchedGroupResultsList;
+
+            pub const MatchedResultIterator = RegexUnmanaged.MatchedResultIterator;
+            pub const MatchedGroupResultIterator = RegexUnmanaged.MatchedGroupResultIterator;
+            pub const DefaultRegexOptions = RegexUnmanaged.DefaultRegexOptions;
+            pub const DefaultMatchOptions = RegexUnmanaged.DefaultMatchOptions;
+
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+                return Self{
+                    .allocator = allocator,
+                    .unmanaged = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options),
+                };
+            }
+
+            pub inline fn succeed(this: *const Self) bool {
+                return this.unmanaged.succeed();
+            }
+
+            pub inline fn errorNumber(this: *const Self) usize {
+                return this.unmanaged.errorNumber();
+            }
+
+            pub inline fn errorOffset(this: *const Self) usize {
+                return this.unmanaged.errorOffset();
+            }
+
+            pub inline fn errorMessage(this: *const Self) []const u8 {
+                return this.unmanaged.errorMessage();
+            }
+
+            pub inline fn getResults(this: *const Self) ?[]pcre.RegexMatchResult {
+                return this.unmanaged.getResults();
+            }
+
+            pub inline fn getResultsIterator(this: *Self, subject: []const u8) MatchedResultIterator {
+                return this.unmanaged.getResultsIterator(subject);
+            }
+
+            pub inline fn getGroupResults(this: *const Self) ?[]pcre.RegexNamedGroupResult {
+                return this.unmanaged.getGroupResults();
+            }
+
+            pub inline fn getGroupResultsIterator(this: *Self, subject: []const u8) MatchedGroupResultIterator {
+                return this.unmanaged.getGroupResultsIterator(subject);
+            }
+
+            pub inline fn deinit(this: *Self) void {
+                this.unmanaged.deinit(this.allocator);
+            }
+
+            pub inline fn reset(this: *Self) anyerror!void {
+                return this.unmanaged.reset(this.allocator);
+            }
+
+            pub inline fn match(this: *Self, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
+                return this.unmanaged.match(subject_slice, offset_pos, fetch_results, match_options);
+            }
+
+            pub inline fn getNextOffset(this: *Self, subject_slice: []const u8) anyerror!usize {
+                return this.unmanaged.getNextOffset(subject_slice);
+            }
+
+            pub inline fn fetchResults(this: *Self) anyerror!void {
+                this.unmanaged.fetchResults();
+            }
+
+            pub inline fn matchAll(this: *Self, subject_slice: []const u8, offset_pos: usize, match_options: u32) anyerror!void {
+                this.unmanaged.matchAll(subject_slice, offset_pos, match_options);
+            }
+        };
+    } else {
+        return struct {
+            const Self = @This();
+
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+                _ = allocator;
+                _ = pattern;
+                _ = regex_options;
+                _ = match_options;
+                @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
             }
         };
     }
