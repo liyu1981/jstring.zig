@@ -112,7 +112,7 @@ pub const JString = struct {
     }
 
     pub inline fn format(
-        this: *const JStringUnmanaged,
+        this: *const JString,
         comptime fmt: []const u8,
         options: std.fmt.FormatOptions,
         writer: anytype,

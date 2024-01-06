@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
     obj_pcre_binding.addCSourceFile(.{ .file = .{ .path = "src/pcre_binding.c" }, .flags = &.{"-std=c17"} });
     obj_pcre_binding.addIncludePath(.{ .path = "/opt/homebrew/include" });
 
-    const lib = b.addStaticLibrary(.{
+    const jstring_lib = b.addStaticLibrary(.{
         .name = "jstring",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
@@ -31,26 +31,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    lib.addObject(obj_pcre_binding);
-    lib.linkSystemLibrary2("libpcre2-8", .{ .use_pkg_config = .yes });
+    jstring_lib.addObject(obj_pcre_binding);
+    jstring_lib.linkSystemLibrary2("libpcre2-8", .{ .use_pkg_config = .yes });
     // lib.linkSystemLibraryName("libpcre2-8");
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
-    b.installArtifact(lib);
-
-    // const exe = b.addExecutable(.{
-    //     .name = "jstring",
-    //     .root_source_file = .{ .path = "src/main.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    // b.installArtifact(exe);
+    b.installArtifact(jstring_lib);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
