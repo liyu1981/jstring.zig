@@ -97,17 +97,24 @@ pub const JString = struct {
         };
     }
 
-    pub fn newFromStringify(allocator: std.mem.Allocator, value: anytype) anyerror!JString {
+    pub inline fn newFromStringify(allocator: std.mem.Allocator, value: anytype) anyerror!JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromStringify(allocator, value),
         };
     }
 
-    pub fn newFromStringifyWithOptions(allocator: std.mem.Allocator, value: anytype, options: std.json.StringifyOptions) anyerror!JString {
+    pub inline fn newFromStringifyWithOptions(allocator: std.mem.Allocator, value: anytype, options: std.json.StringifyOptions) anyerror!JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromStringifyWithOptions(allocator, value, options),
+        };
+    }
+
+    pub inline fn newFromFile(allocator: std.mem.Allocator, f: std.mem.File) anyerror!JString {
+        return JString{
+            .allocator = allocator,
+            .unmanaged = try JStringUnmanaged.newFromFile(allocator, f),
         };
     }
 
@@ -561,7 +568,7 @@ pub const JString = struct {
 
     // ** valueOf
 
-    pub inline fn valueOf(this: *const JString) []u8 {
+    pub inline fn valueOf(this: *JString) []const u8 {
         return this.unmanaged.str_slice;
     }
 };
@@ -701,6 +708,19 @@ pub const JStringUnmanaged = struct {
         return JStringUnmanaged{
             .str_slice = new_slice,
         };
+    }
+
+    pub fn newFromFile(allocator: std.mem.Allocator, f: std.fs.File) anyerror!JStringUnmanaged {
+        const stat = try f.stat();
+        var new_slice = try allocator.alloc(u8, stat.size);
+        const read_size = try f.readAll(new_slice);
+        if (read_size == stat.size) {
+            return JStringUnmanaged{
+                .str_slice = new_slice,
+            };
+        } else {
+            return JStringUnmanaged.newFromSlice(allocator, new_slice[0..read_size]);
+        }
     }
 
     // utils
@@ -1831,7 +1851,7 @@ pub const JStringUnmanaged = struct {
 
     // ** valueOf
 
-    pub inline fn valueOf(this: *const JStringUnmanaged) []u8 {
+    pub inline fn valueOf(this: *JStringUnmanaged) []const u8 {
         return this.str_slice;
     }
 };
@@ -2846,6 +2866,15 @@ test "constructors" {
         \\}
     ;
     try testing.expect(str9.eqlSlice(str9value));
+    {
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        var tmp_file = try tmp_dir.dir.createFile("test.txt", .{ .read = true });
+        try tmp_file.writeAll("hello,world");
+        try tmp_file.seekTo(0);
+        const str10 = try JStringUnmanaged.newFromFile(arena.allocator(), tmp_file);
+        try testing.expect(str10.eqlSlice("hello,world"));
+    }
 }
 
 test "formatter" {
