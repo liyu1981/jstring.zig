@@ -11,6 +11,7 @@ or pcre2_dfa_match(). PCRE2_NO_UTF_CHECK affects only the function to which it
 is passed. Put these bits at the most significant end of the options word so
 others can be added next to them */
 
+// translate-c provide-begin: /#define\s(?<tk>\S+)\s.+/
 #define PCRE2_ANCHORED 0x80000000u
 #define PCRE2_NO_UTF_CHECK 0x40000000u
 #define PCRE2_ENDANCHORED 0x20000000u
@@ -52,12 +53,15 @@ D   is inspected during pcre2_dfa_match() execution
 #define PCRE2_EXTENDED_MORE 0x01000000u       /* C       */
 #define PCRE2_LITERAL 0x02000000u             /* C       */
 #define PCRE2_MATCH_INVALID_UTF 0x04000000u   /*   J M D */
+// translate-c provide-end: /#define\s(?<tk>\S+)\s.+/
 
+// translate-c provide: RegexMatchResult
 typedef struct {
     size_t start;
     size_t len;
 } RegexMatchResult;
 
+// translate-c provide: RegexNamedGroupResult
 typedef struct {
     char* name;
     size_t name_len;
@@ -65,6 +69,7 @@ typedef struct {
     size_t len;
 } RegexNamedGroupResult;
 
+// translate-c provide: RegexContext
 typedef struct {
     int error_number;
     size_t error_offset;
@@ -91,13 +96,21 @@ typedef struct {
     void* match_data;
 } RegexContext;
 
+// translate-c provide: get_last_error_message
 void get_last_error_message(RegexContext* context);
+// translate-c provide: compile
 uint8_t compile(RegexContext* context, const unsigned char* pattern);
+// translate-c provide: free_context
 void free_context(RegexContext* context);
+// translate-c provide: match
 int64_t match(RegexContext* context, const unsigned char* subject, size_t subject_len, size_t start_offset);
+// translate-c provide: prepare_named_groups
 void prepare_named_groups(RegexContext* context);
+// translate-c provide: fetch_match_results
 void fetch_match_results(RegexContext* context);
+// translate-c provide: get_next_offset
 void get_next_offset(RegexContext* context, const unsigned char* subject, size_t subject_len);
+// translate-c provide: free_for_next_match
 void free_for_next_match(RegexContext* context);
 
 #endif

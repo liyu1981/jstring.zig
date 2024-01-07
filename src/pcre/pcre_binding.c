@@ -20,8 +20,10 @@ void get_last_error_message(RegexContext* context) {
                                          buffer);
 }
 
+#define PCRE2_FINE 100  // 100 is pcre2 no error
+
 void reset_context(RegexContext* context) {
-    context->error_number = 0;
+    context->error_number = PCRE2_FINE;
     context->error_offset = 0;
     context->error_message_len = 0;
 
@@ -195,14 +197,15 @@ void free_for_next_match(RegexContext* context) {
         return;
     }
 
-    if (context->re != NULL) {
-        pcre2_code_free((pcre2_code*)context->re);
-    }
+    // if (context->re != NULL) {
+    //     pcre2_code_free((pcre2_code*)context->re);
+    // }
+
     if (context->match_data != NULL) {
         pcre2_match_data_free((pcre2_match_data*)context->match_data);
     }
 
-    context->error_number = 0;
+    context->error_number = PCRE2_FINE;
     context->error_offset = 0;
     context->error_message_len = 0;
 

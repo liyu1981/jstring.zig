@@ -111,11 +111,15 @@ pub const JString = struct {
         };
     }
 
-    pub inline fn newFromFile(allocator: std.mem.Allocator, f: std.mem.File) anyerror!JString {
+    pub inline fn newFromFile(allocator: std.mem.Allocator, f: std.fs.File) anyerror!JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromFile(allocator, f),
         };
+    }
+
+    pub inline fn hash(this: *const JString) usize {
+        return this.unmanaged.hash();
     }
 
     pub inline fn format(
@@ -136,7 +140,10 @@ pub const JString = struct {
     }
 
     pub inline fn clone(this: *const JString) anyerror!JString {
-        return this.unmanaged.clone(this.allocator);
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.clone(this.allocator),
+        };
     }
 
     pub inline fn isEmpty(this: *const JString) bool {
@@ -152,7 +159,7 @@ pub const JString = struct {
     }
 
     pub inline fn explode(this: *const JString, limit: isize) anyerror![]JString {
-        const unmanaged_strings = try this.unmanaged.explode(limit, this.allocator);
+        const unmanaged_strings = try this.unmanaged.explode(this.allocator, limit);
         const strings = try this.allocator.alloc(JString, unmanaged_strings.len);
         for (0..unmanaged_strings.len) |i| {
             strings[i] = JString{
@@ -336,7 +343,10 @@ pub const JString = struct {
 
     pub inline fn match(this: *const JString, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) anyerror!Regex {
         if (enable_pcre) {
-            return this.unmanaged.match(this.allocator, pattern, offset, fetch_results, regex_options, match_options);
+            return Regex{
+                .allocator = this.allocator,
+                .unmanaged = try this.unmanaged.match(this.allocator, pattern, offset, fetch_results, regex_options, match_options),
+            };
         } else {
             @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
         }
@@ -452,7 +462,7 @@ pub const JString = struct {
     pub inline fn slice(this: *const JString, index_start: isize, index_end: isize) anyerror!JString {
         return JString{
             .allocator = this.allocator,
-            .unmanaged = try this.unmanaged.slice(index_start, index_end),
+            .unmanaged = try this.unmanaged.slice(this.allocator, index_start, index_end),
         };
     }
 
@@ -568,7 +578,7 @@ pub const JString = struct {
 
     // ** valueOf
 
-    pub inline fn valueOf(this: *JString) []const u8 {
+    pub inline fn valueOf(this: *const JString) []const u8 {
         return this.unmanaged.str_slice;
     }
 };
@@ -724,6 +734,12 @@ pub const JStringUnmanaged = struct {
     }
 
     // utils
+
+    pub fn hash(this: *const JStringUnmanaged) usize {
+        var wyhash = std.hash.Wyhash.init(0);
+        wyhash.update(this.str_slice);
+        return wyhash.final();
+    }
 
     pub fn format(
         this: *const JStringUnmanaged,
@@ -1097,11 +1113,11 @@ pub const JStringUnmanaged = struct {
             if (std.mem.eql(u8, haystack_slice[k .. k + needle_slice.len], needle_slice)) {
                 occurence = @as(isize, @intCast(k));
                 if (!want_last) {
-                    return if (occurence > 0) @as(isize, @intCast(pos)) + occurence else occurence;
+                    return if (occurence >= 0) @as(isize, @intCast(pos)) + occurence else occurence;
                 }
             } else continue;
         }
-        return if (occurence > 0) @as(isize, @intCast(pos)) + occurence else occurence;
+        return if (occurence >= 0) @as(isize, @intCast(pos)) + occurence else occurence;
     }
 
     fn _kmp_indexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize, want_last: bool) anyerror!isize {
@@ -1851,10 +1867,27 @@ pub const JStringUnmanaged = struct {
 
     // ** valueOf
 
-    pub inline fn valueOf(this: *JStringUnmanaged) []const u8 {
+    pub inline fn valueOf(this: *const JStringUnmanaged) []const u8 {
         return this.str_slice;
     }
 };
+
+// util functions
+
+pub inline fn freeJStringArray(a: []JString) void {
+    if (a.len > 0) {
+        const allocator = a[0].allocator;
+        for (0..a.len) |i| a[i].deinit();
+        allocator.free(a);
+    }
+}
+
+pub fn freeJStringUnmanagedArray(a: []JStringUnmanaged, allocator: std.mem.Allocator) void {
+    if (a.len > 0) {
+        for (0..a.len) |i| a[i].deinit(allocator);
+        allocator.free(a);
+    }
+}
 
 // optional components
 
@@ -2171,6 +2204,10 @@ fn defineRegex(comptime with_pcre: bool) type {
                 };
             }
 
+            pub inline fn matchSucceed(this: *const Self) bool {
+                return this.unmanaged.matchSucceed();
+            }
+
             pub inline fn succeed(this: *const Self) bool {
                 return this.unmanaged.succeed();
             }
@@ -2199,6 +2236,10 @@ fn defineRegex(comptime with_pcre: bool) type {
                 return this.unmanaged.getGroupResults();
             }
 
+            pub inline fn getGroupResultByName(this: *const Self, name: []const u8) ?pcre.RegexNamedGroupResult {
+                return this.unmanaged.getGroupResultByName(name);
+            }
+
             pub inline fn getGroupResultsIterator(this: *Self, subject: []const u8) MatchedGroupResultIterator {
                 return this.unmanaged.getGroupResultsIterator(subject);
             }
@@ -2212,7 +2253,7 @@ fn defineRegex(comptime with_pcre: bool) type {
             }
 
             pub inline fn match(this: *Self, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
-                return this.unmanaged.match(subject_slice, offset_pos, fetch_results, match_options);
+                return this.unmanaged.match(this.allocator, subject_slice, offset_pos, fetch_results, match_options);
             }
 
             pub inline fn getNextOffset(this: *Self, subject_slice: []const u8) anyerror!usize {
@@ -2379,6 +2420,18 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 return MatchedGroupResultIterator.init(this, subject);
             }
 
+            pub fn getGroupResultByName(this: *const Self, name: []const u8) ?pcre.RegexNamedGroupResult {
+                if (this.context_.matched_group_count > 0) {
+                    const c = @as(usize, @intCast(this.context_.matched_group_count));
+                    for (this.context_.matched_group_results[0..c]) |gr| {
+                        if (std.mem.eql(u8, gr.name[0..gr.name_len], name)) {
+                            return gr;
+                        }
+                    }
+                    return null;
+                } else return null;
+            }
+
             pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
                 if (pattern.len == 0) {
                     return JStringError.RegexBadPattern;
@@ -2421,15 +2474,23 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             /// reset regex for next new match. This will only reset matched_results & matched_group_results & free
             /// pcre underlying match object.
             pub fn reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {
-                allocator.free(this.context_.matched_results);
-                for (this.context_.matched_group_results) |matched_group_result| {
-                    allocator.free(matched_group_result.name);
+                var c: usize = 0;
+                if (this.context_.matched_results_capacity > 0) {
+                    c = @as(usize, @intCast(this.context_.matched_results_capacity));
+                    allocator.free(this.context_.matched_results[0..c]);
                 }
-                allocator.free(this.context_.matched_group_results);
+                if (this.context_.matched_group_count > 0) {
+                    c = @as(usize, @intCast(this.context_.matched_group_count));
+                    for (this.context_.matched_group_results[0..c]) |matched_group_result| {
+                        const l = matched_group_result.name_len;
+                        allocator.free(matched_group_result.name[0..l]);
+                    }
+                    allocator.free(this.context_.matched_group_results[0..c]);
+                }
                 // order is important, must do after free matched_results & matched_group_results
                 // as pcre.free_for_next_match will reset them
                 pcre.free_for_next_match(this.context_);
-                try this._reset();
+                try this._reset(allocator);
             }
 
             fn _reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {

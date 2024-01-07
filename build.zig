@@ -20,8 +20,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    obj_pcre_binding.addCSourceFile(.{ .file = .{ .path = "src/pcre_binding.c" }, .flags = &.{"-std=c17"} });
-    obj_pcre_binding.addIncludePath(.{ .path = "/opt/homebrew/include" });
+    obj_pcre_binding.addCSourceFile(.{ .file = .{ .path = "src/pcre/pcre_binding.c" }, .flags = &.{"-std=c17"} });
+    obj_pcre_binding.linkSystemLibrary2("libpcre2-8", .{ .use_pkg_config = .yes });
 
     const jstring_lib = b.addStaticLibrary(.{
         .name = "jstring",

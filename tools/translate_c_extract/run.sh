@@ -1,1 +1,6 @@
-./scripts/zig.sh run --mod jstring:jstring:./src/jstring.zig --deps jstring tools/translate_c_extract/main.zig
+FOLDER=translate_c_extract
+ZIG="../../scripts/zig.sh"
+
+cd tools/translate_c_extract
+${ZIG} build run -- $@
+cd - > /dev/null
