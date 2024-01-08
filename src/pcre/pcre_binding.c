@@ -1,5 +1,6 @@
 #include "pcre_binding.h"
 
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -27,21 +28,27 @@ void reset_context(RegexContext* context) {
     context->error_offset = 0;
     context->error_message_len = 0;
 
+    // intentionally do not reset these 2 options
+    // regex_options
+    // match_options
+
     context->with_match_result = FALSE;
-    context->named_group_count = 0;
     context->next_offset = 0;
     context->origin_offset = 0;
     context->rc = 0;
 
+    context->group_name_count = 0;
+    context->group_names = NULL;
+
     context->matched_count = 0;
-    context->matched_results_capacity = 0;
-    context->matched_results = NULL;
+    memset(&context->matched_result, 0, sizeof(RegexMatchResult));
 
     context->matched_group_count = 0;
+    context->matched_group_capacity = 0;
     context->matched_group_results = NULL;
 
-    context->match_data = NULL;
     context->re = NULL;
+    context->match_data = NULL;
 }
 
 uint8_t compile(RegexContext* context, const unsigned char* pattern) {
@@ -50,14 +57,51 @@ uint8_t compile(RegexContext* context, const unsigned char* pattern) {
     pcre2_code* re = pcre2_compile(
         pattern,
         PCRE2_ZERO_TERMINATED,
-        0,
+        context->regex_options,
         &context->error_number,
         &context->error_offset,
         NULL);
     context->re = (void*)re;
 
     if (re != NULL) {
-        pcre2_pattern_info(re, PCRE2_INFO_NAMECOUNT, &context->named_group_count);
+        uint32_t group_capacity;
+        pcre2_pattern_info((pcre2_code*)context->re, PCRE2_INFO_CAPTURECOUNT, &group_capacity);
+        context->matched_group_capacity = group_capacity;
+
+        uint32_t group_name_count;
+        pcre2_pattern_info(re, PCRE2_INFO_NAMECOUNT, &group_name_count);
+        context->group_name_count = group_name_count;
+
+        if (group_name_count > 0) {
+            context->group_names = (RegexGroupName*)malloc(sizeof(RegexGroupName) * group_name_count);
+            if (context->group_names == NULL) {
+                fprintf(stderr, "memory allocation for group names(%d) failed! Abort!", group_name_count);
+                raise(SIGABRT);
+            }
+
+            PCRE2_SPTR name_table;
+            uint32_t name_entry_size;
+            PCRE2_SPTR tabptr;
+            int i;
+
+            pcre2_pattern_info((pcre2_code*)context->re, PCRE2_INFO_NAMETABLE, &name_table);
+            pcre2_pattern_info((pcre2_code*)context->re, PCRE2_INFO_NAMEENTRYSIZE, &name_entry_size);
+            tabptr = name_table;
+
+            for (i = 0; i < group_name_count; i++) {
+                RegexGroupName* group_name_ptr = context->group_names + i;
+                group_name_ptr->index = (tabptr[0] << 8) | tabptr[1];
+                group_name_ptr->name_len = strlen((const char*)tabptr + 2);          // pcre group name is 0 terminated
+                group_name_ptr->name = (char*)malloc(group_name_ptr->name_len + 1);  // +1 for the zero sentinel
+                if (group_name_ptr->name == NULL) {
+                    fprintf(stderr, "memory allocation for group name (%d bytes) failed! Abort!", (int)group_name_ptr->name_len);
+                    raise(SIGABRT);
+                }
+                sprintf(group_name_ptr->name, "%s", tabptr + 2);
+                group_name_ptr->name[group_name_ptr->name_len + 1] = 0;
+                tabptr += name_entry_size;  // move to next entry
+            }
+        }
     }
 
     return re == NULL ? FALSE : TRUE;
@@ -66,6 +110,13 @@ uint8_t compile(RegexContext* context, const unsigned char* pattern) {
 void free_context(RegexContext* context) {
     if (context->re != NULL) {
         pcre2_code_free((pcre2_code*)context->re);
+        if (context->group_name_count > 0) {
+            int i;
+            for (i = 0; i < context->group_name_count; i++) {
+                free(context->group_names[i].name);
+            }
+            free(context->group_names);
+        }
     }
     if (context->match_data != NULL) {
         pcre2_match_data_free((pcre2_match_data*)context->match_data);
@@ -87,31 +138,14 @@ int64_t match(RegexContext* context, const unsigned char* subject, size_t subjec
         context->match_options,
         context->match_data,
         NULL);
-    context->matched_results_capacity = context->rc;
+
+    // there is always only one match result if matched, others in rc are group results
+    context->matched_count = context->rc > 0 ? 1 : 0;
     context->with_match_result = TRUE;
+
     context->origin_offset = start_offset;
 
     return context->rc;
-}
-
-void prepare_named_groups(RegexContext* context) {
-    if (context->re != NULL && context->named_group_count > 0) {
-        PCRE2_SPTR name_table;
-        uint32_t name_entry_size;
-        PCRE2_SPTR tabptr;
-        int n;
-        int i;
-
-        pcre2_pattern_info((pcre2_code*)context->re, PCRE2_INFO_NAMETABLE, &name_table);
-        pcre2_pattern_info((pcre2_code*)context->re, PCRE2_INFO_NAMEENTRYSIZE, &name_entry_size);
-        tabptr = name_table;
-
-        for (i = 0; i < context->named_group_count; i++) {
-            n = (tabptr[0] << 8) | tabptr[1];
-            (context->matched_group_results + i)->name_len = name_entry_size - 3;
-            tabptr += name_entry_size;
-        }
-    }
 }
 
 void fetch_match_results(RegexContext* context) {
@@ -121,7 +155,9 @@ void fetch_match_results(RegexContext* context) {
 
     int i;
     int j;
-    int n;
+    int group_index;
+    int name_index;
+    int found_group_name_index = -1;
     PCRE2_SPTR name_table;
     uint32_t name_entry_size;
     PCRE2_SPTR tabptr;
@@ -130,35 +166,49 @@ void fetch_match_results(RegexContext* context) {
     pcre2_pattern_info((pcre2_code*)context->re, PCRE2_INFO_NAMETABLE, &name_table);
     pcre2_pattern_info((pcre2_code*)context->re, PCRE2_INFO_NAMEENTRYSIZE, &name_entry_size);
 
-    if (context->named_group_count > 0) {
-        tabptr = name_table;
-        for (i = 0; i < context->named_group_count; i++) {
-            n = (tabptr[0] << 8) | tabptr[1];
-            sprintf((context->matched_group_results + i)->name, "%.*s", name_entry_size - 3, tabptr + 2);
-            (context->matched_group_results + i)->start = ovector[2 * n];
-            (context->matched_group_results + i)->len = ovector[2 * n + 1] - ovector[2 * n];
-            tabptr += name_entry_size;
-        }
-
-        // after each single match, set this to match named_group_count
-        // if multiple matches, matched_group_count will be reassign to the total matched_group_count
-        context->matched_group_count = context->named_group_count;
-    }
+    // for single match
+    // 1. if context->rc == 1, means there is only match but no group results
+    // 2. if context->rc > 1, means the [0] is match result, but rest are all group results
+    //    however count of all groups results can be > named_group_count, which are just unnamed groups
 
     tabptr = name_table;
-    for (i = 0, j = 0; i < context->rc; i++) {
-        n = (tabptr[0] << 8) | tabptr[1];
-        if (i == n) {
-            // this is a group result, skip and move to next entry
-            tabptr += name_entry_size;
-            continue;
+    for (i = 0; i < context->rc; i++) {
+        if (i == 0) {
+            // the first entry is the single match result
+            context->matched_result.start = ovector[2 * i];
+            context->matched_result.len = ovector[2 * i + 1] - ovector[2 * i];
         } else {
-            (context->matched_results + j)->start = ovector[2 * i];
-            (context->matched_results + j)->len = ovector[2 * i + 1] - ovector[2 * i];
-            j++;
+            group_index = i;
+            name_index = (tabptr[0] << 8) | tabptr[1];
+
+            found_group_name_index = -1;
+            for (j = 0; j < context->group_name_count; j++) {
+                // this is stupid, a hash map will be better, but really necessary? are we going to have too many group names?
+                if (context->group_names[j].index == group_index) {
+                    found_group_name_index = j;
+                    break;
+                }
+            }
+
+            RegexGroupResult* cur_group_result = context->matched_group_results + (group_index - 1);  // -1 because 1st is single match result
+
+            if (found_group_name_index >= 0) {
+                cur_group_result->name = context->group_names[found_group_name_index].name;
+                cur_group_result->name_len = context->group_names[found_group_name_index].name_len;
+                cur_group_result->index = group_index;
+                cur_group_result->start = ovector[2 * i];
+                cur_group_result->len = ovector[2 * i + 1] - ovector[2 * i];
+            } else {
+                cur_group_result->name = NULL;
+                cur_group_result->name_len = 0;
+                cur_group_result->index = group_index;
+                cur_group_result->start = ovector[2 * i];
+                cur_group_result->len = ovector[2 * i + 1] - ovector[2 * i];
+            }
+
+            context->matched_group_count += 1;
         }
     }
-    context->matched_count = j;
 }
 
 void get_next_offset(RegexContext* context, const unsigned char* subject, size_t subject_len) {
@@ -193,6 +243,8 @@ void get_next_offset(RegexContext* context, const unsigned char* subject, size_t
 }
 
 void free_for_next_match(RegexContext* context) {
+    // pay attention to not free re, group_names as they should be kept same for next match
+
     if (context->with_match_result == FALSE) {
         return;
     }
@@ -210,16 +262,18 @@ void free_for_next_match(RegexContext* context) {
     context->error_message_len = 0;
 
     context->with_match_result = FALSE;
-    // context->named_group_count = 0;
     context->next_offset = 0;
     context->origin_offset = 0;
     context->rc = 0;
 
     context->matched_count = 0;
-    context->matched_results = NULL;
+    memset(&context->matched_result, 0, sizeof(RegexMatchResult));
 
     context->matched_group_count = 0;
-    context->matched_group_results = NULL;
+
+    // do not reset group_capacity and matched_group_results mem as they can be reused
+    // context->matched_group_capacity = 0;
+    // context->matched_group_results = NULL;
 
     context->match_data = NULL;
     // context->re = NULL;

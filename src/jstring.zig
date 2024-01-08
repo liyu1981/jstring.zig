@@ -154,8 +154,8 @@ pub const JString = struct {
         return this.unmanaged.eqlSlice(string_slice);
     }
 
-    pub inline fn eqlJStringUmanaged(this: *const JString, that: JString) bool {
-        return this.eqlSlice(that.str_slice);
+    pub inline fn eql(this: *const JString, that: JString) bool {
+        return this.eqlSlice(that.unmanaged.str_slice);
     }
 
     pub inline fn explode(this: *const JString, limit: isize) anyerror![]JString {
@@ -214,13 +214,41 @@ pub const JString = struct {
 
     // ** concat
 
-    pub inline fn concat(this: *const JString, rest_jstrings: []const JString) anyerror!JString {
-        const unmanaged_rest_jstrings = [rest_jstrings.len]JStringUnmanaged;
-        for (0..rest_jstrings.len) |i| unmanaged_rest_jstrings[i] = rest_jstrings[i].unmanaged;
-        const new_unmanaged = try this.unmanaged.concat(this.allocator, unmanaged_rest_jstrings);
+    pub inline fn concat(this: *const JString, other_jstring: JString) anyerror!JString {
         return JString{
             .allocator = this.allocator,
-            .unmanaged = new_unmanaged,
+            .unmanaged = try this.unmanaged.concat(this.allocator, other_jstring.unmanaged),
+        };
+    }
+
+    pub inline fn concatSlice(this: *const JString, other_slice: []const u8) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.concatSlice(this.allocator, other_slice),
+        };
+    }
+
+    /// as we can not know len of rest_jstrings in comptime, so this method is a bit of slower than unmanaged version
+    /// (or concatManySlices). Preciesly, slower than one allocation/deallocation of
+    /// `[rest_jstrings.len]const []const u8` time.
+    pub fn concatMany(this: *const JString, rest_jstrings: []const JString) anyerror!JString {
+        if (rest_jstrings.len == 0) {
+            return this.clone();
+        } else {
+            const rest_slices = try this.allocator.alloc([]const u8, rest_jstrings.len);
+            defer this.allocator.free(rest_slices);
+            for (0..rest_slices.len) |i| rest_slices[i] = rest_jstrings[i].unmanaged.str_slice;
+            return JString{
+                .allocator = this.allocator,
+                .unmanaged = try this.unmanaged.concatManySlices(this.allocator, rest_slices),
+            };
+        }
+    }
+
+    pub inline fn concatManySlices(this: *const JString, rest_slices: []const []const u8) anyerror!JString {
+        return JString{
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.concatManySlices(this.allocator, rest_slices),
         };
     }
 
@@ -797,7 +825,7 @@ pub const JStringUnmanaged = struct {
     }
 
     /// Equals to `this.eqlSlice(that.str_slice)`
-    pub inline fn eqlJStringUmanaged(this: *const JStringUnmanaged, that: JStringUnmanaged) bool {
+    pub inline fn eql(this: *const JStringUnmanaged, that: JStringUnmanaged) bool {
         return this.eqlSlice(that.str_slice);
     }
 
@@ -958,9 +986,31 @@ pub const JStringUnmanaged = struct {
 
     // ** concat
 
+    /// Concat jstrings with the other.
+    pub fn concat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, other_jstring: JStringUnmanaged) anyerror!JStringUnmanaged {
+        return this.concatSlice(allocator, other_jstring.str_slice);
+    }
+
+    pub fn concatSlice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, other_slice: []const u8) anyerror!JStringUnmanaged {
+        if (other_slice.len == 0) {
+            return this.clone(allocator);
+        } else {
+            const this_len = this.len();
+            const other_len = other_slice.len;
+            const new_slice = try allocator.alloc(u8, this_len + other_len);
+            var new_slice_ptr = new_slice.ptr;
+            @memcpy(new_slice_ptr, this.str_slice);
+            new_slice_ptr += this.str_slice.len;
+            @memcpy(new_slice_ptr, other_slice);
+            return JStringUnmanaged{
+                .str_slice = new_slice,
+            };
+        }
+    }
+
     /// Concat jstrings in rest_jstrings in order, return a new allocated jstring. If `rest_jstrings.len == 0`, will
     /// return a copy of this jstring.
-    pub fn concat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_jstrings: []const JStringUnmanaged) anyerror!JStringUnmanaged {
+    pub fn concatMany(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_jstrings: []const JStringUnmanaged) anyerror!JStringUnmanaged {
         if (rest_jstrings.len == 0) {
             return this.clone(allocator);
         } else {
@@ -979,6 +1029,32 @@ pub const JStringUnmanaged = struct {
             for (rest_jstrings) |jstring| {
                 @memcpy(new_slice_ptr, jstring.str_slice);
                 new_slice_ptr += jstring.len();
+            }
+            return JStringUnmanaged{
+                .str_slice = new_slice,
+            };
+        }
+    }
+
+    pub fn concatManySlices(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_slices: []const []const u8) anyerror!JStringUnmanaged {
+        if (rest_slices.len == 0) {
+            return this.clone(allocator);
+        } else {
+            var rest_sum_len: usize = 0;
+            const new_len = this.len() + lenbrk: {
+                for (rest_slices) |s| {
+                    rest_sum_len += s.len;
+                }
+                break :lenbrk rest_sum_len;
+            };
+
+            const new_slice = try allocator.alloc(u8, new_len);
+            var new_slice_ptr = new_slice.ptr;
+            @memcpy(new_slice_ptr, this.str_slice);
+            new_slice_ptr += this.str_slice.len;
+            for (rest_slices) |s| {
+                @memcpy(new_slice_ptr, s);
+                new_slice_ptr += s.len;
             }
             return JStringUnmanaged{
                 .str_slice = new_slice,
@@ -1013,7 +1089,7 @@ pub const JStringUnmanaged = struct {
             var rest_items_jstring = try JStringUnmanaged.newFromFormat(allocator, fmt, rest_items);
             defer rest_items_jstring.deinit(allocator);
             var rest_items_jstrings = [1]JStringUnmanaged{rest_items_jstring};
-            return this.concat(allocator, &rest_items_jstrings);
+            return this.concatMany(allocator, &rest_items_jstrings);
         }
     }
 
@@ -1195,7 +1271,7 @@ pub const JStringUnmanaged = struct {
     /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here: https://regex101.com/
     pub inline fn match(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
         if (enable_pcre) {
-            var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
+            var re = try RegexUnmanaged.init(allocator, pattern, regex_options);
             try re.match(allocator, this.str_slice, offset, fetch_results, match_options);
             return re;
         } else {
@@ -1209,7 +1285,7 @@ pub const JStringUnmanaged = struct {
     /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here: https://regex101.com/
     pub inline fn matchAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
         if (enable_pcre) {
-            var re = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options);
+            var re = try RegexUnmanaged.init(allocator, pattern, regex_options);
             try re.matchAll(allocator, this.str_slice, offset, match_options);
             return re;
         } else {
@@ -1372,13 +1448,16 @@ pub const JStringUnmanaged = struct {
 
     fn _replaceByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8, comptime match_all: bool) anyerror!JStringUnmanaged {
         if (enable_pcre) {
-            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
+            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions);
             if (match_all) {
                 try re.matchAll(allocator, this.str_slice, 0, RegexUnmanaged.DefaultMatchOptions);
             } else {
                 try re.match(allocator, this.str_slice, 0, true, RegexUnmanaged.DefaultMatchOptions);
             }
-            if (re.succeed() and re.context_.rc >= 0) {
+            if (!re.succeed()) {
+                return JStringError.RegexMatchFailed;
+            }
+            if (re.matchSucceed()) {
                 var first_gap_start_from_zero = false;
                 var last_gap_end_in_end = false;
                 const gap_count = brk: {
@@ -1468,7 +1547,7 @@ pub const JStringUnmanaged = struct {
     /// This function is searching by regex so it requires allocator.
     pub fn searchByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize) anyerror!isize {
         if (enable_pcre) {
-            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
+            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions);
             try re.match(allocator, this.str_slice, offset, true, RegexUnmanaged.DefaultMatchOptions);
             defer re.deinit(allocator);
             if (re.succeed() and re.matchSucceed()) {
@@ -1574,7 +1653,8 @@ pub const JStringUnmanaged = struct {
     }
 
     /// split by simple seperator([]const u8). If you need to split by white spaces, use `splitByWhiteSpace`, or
-    /// even more advanced `splitByRegex` (need to enable pcre support)
+    /// even more advanced `splitByRegex` (need to enable pcre support). Given limit negative value to split any many
+    /// as possible.
     pub fn split(this: *JStringUnmanaged, allocator: std.mem.Allocator, seperator: []const u8, limit: isize) anyerror![]JStringUnmanaged {
         const real_limit = brk: {
             if (limit < 0) {
@@ -1647,7 +1727,7 @@ pub const JStringUnmanaged = struct {
                 return this._cloneAsArray(allocator);
             }
 
-            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions, RegexUnmanaged.DefaultMatchOptions);
+            var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions);
             try re.matchAll(allocator, this.str_slice, offset, RegexUnmanaged.DefaultMatchOptions);
             if (re.succeed() and re.matchSucceed()) {
                 var first_gap_start_from_zero = false;
@@ -1882,7 +1962,7 @@ pub inline fn freeJStringArray(a: []JString) void {
     }
 }
 
-pub fn freeJStringUnmanagedArray(a: []JStringUnmanaged, allocator: std.mem.Allocator) void {
+pub fn freeJStringUnmanagedArray(allocator: std.mem.Allocator, a: []JStringUnmanaged) void {
     if (a.len > 0) {
         for (0..a.len) |i| a[i].deinit(allocator);
         allocator.free(a);
@@ -2197,10 +2277,10 @@ fn defineRegex(comptime with_pcre: bool) type {
             pub const DefaultRegexOptions = RegexUnmanaged.DefaultRegexOptions;
             pub const DefaultMatchOptions = RegexUnmanaged.DefaultMatchOptions;
 
-            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32) anyerror!Self {
                 return Self{
                     .allocator = allocator,
-                    .unmanaged = try RegexUnmanaged.init(allocator, pattern, regex_options, match_options),
+                    .unmanaged = try RegexUnmanaged.init(allocator, pattern, regex_options),
                 };
             }
 
@@ -2232,11 +2312,11 @@ fn defineRegex(comptime with_pcre: bool) type {
                 return this.unmanaged.getResultsIterator(subject);
             }
 
-            pub inline fn getGroupResults(this: *const Self) ?[]pcre.RegexNamedGroupResult {
+            pub inline fn getGroupResults(this: *const Self) ?[]pcre.RegexGroupResult {
                 return this.unmanaged.getGroupResults();
             }
 
-            pub inline fn getGroupResultByName(this: *const Self, name: []const u8) ?pcre.RegexNamedGroupResult {
+            pub inline fn getGroupResultByName(this: *const Self, name: []const u8) ?pcre.RegexGroupResult {
                 return this.unmanaged.getGroupResultByName(name);
             }
 
@@ -2291,7 +2371,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
         return struct {
             const Self = @This();
             const MatchedResultsList = std.SinglyLinkedList([]pcre.RegexMatchResult);
-            const MatchedGroupResultsList = std.SinglyLinkedList([]pcre.RegexNamedGroupResult);
+            const MatchedGroupResultsList = std.SinglyLinkedList([]pcre.RegexGroupResult);
 
             pub const MatchedResultIterator = struct {
                 const Result = struct {
@@ -2335,7 +2415,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                     value: []const u8,
                 };
 
-                maybe_group_results: ?[]pcre.RegexNamedGroupResult,
+                maybe_group_results: ?[]pcre.RegexGroupResult,
                 cur_pos: usize = 0,
                 subject_slice: []const u8,
 
@@ -2368,10 +2448,14 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             pub const DefaultMatchOptions: u32 = 0;
 
             context_: *pcre.RegexContext = undefined,
+
             matched_results_list: MatchedResultsList = undefined,
             matched_group_results_list: MatchedGroupResultsList = undefined,
             total_matched_results: usize = 0,
             total_matched_group_results: usize = 0,
+
+            matched_results: []pcre.RegexMatchResult = undefined,
+            matched_group_results: []pcre.RegexGroupResult = undefined,
 
             /// This just means the pcre2 match action has not gone wrong. If want to be sure that there are results,
             /// combine it with `matchSucceed`.
@@ -2380,10 +2464,8 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 return this.context_.error_number == 100;
             }
 
-            /// In pcre2, when rc > 0 means there are something matched, or last action returns meaningful returns. But
-            /// most of our usage this will mean something matched.
             pub inline fn matchSucceed(this: *const Self) bool {
-                return this.context_.rc > 0;
+                return this.context_.rc > 0 or this.total_matched_results > 0;
             }
 
             pub inline fn errorNumber(this: *const Self) usize {
@@ -2399,9 +2481,8 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             }
 
             pub inline fn getResults(this: *const Self) ?[]pcre.RegexMatchResult {
-                if (this.context_.matched_count > 0) {
-                    const c = @as(usize, @intCast(this.context_.matched_count));
-                    return this.context_.matched_results[0..c];
+                if (this.total_matched_results > 0) {
+                    return this.matched_results;
                 } else return null;
             }
 
@@ -2409,10 +2490,9 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 return MatchedResultIterator.init(this, subject);
             }
 
-            pub inline fn getGroupResults(this: *const Self) ?[]pcre.RegexNamedGroupResult {
-                if (this.context_.matched_group_count > 0) {
-                    const c = @as(usize, @intCast(this.context_.matched_group_count));
-                    return this.context_.matched_group_results[0..c];
+            pub inline fn getGroupResults(this: *const Self) ?[]pcre.RegexGroupResult {
+                if (this.total_matched_group_results > 0) {
+                    return this.matched_group_results;
                 } else return null;
             }
 
@@ -2420,8 +2500,20 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 return MatchedGroupResultIterator.init(this, subject);
             }
 
-            pub fn getGroupResultByName(this: *const Self, name: []const u8) ?pcre.RegexNamedGroupResult {
-                if (this.context_.matched_group_count > 0) {
+            pub fn getGroupResultByIndex(this: *const Self, index: usize) ?pcre.RegexGroupResult {
+                if (this.total_matched_group_results > 0) {
+                    const c = @as(usize, @intCast(this.context_.matched_group_count));
+                    for (this.context_.matched_group_results[0..c]) |gr| {
+                        if (gr.index == index) {
+                            return gr;
+                        }
+                    }
+                    return null;
+                } else return null;
+            }
+
+            pub fn getGroupResultByName(this: *const Self, name: []const u8) ?pcre.RegexGroupResult {
+                if (this.total_matched_group_results > 0) {
                     const c = @as(usize, @intCast(this.context_.matched_group_count));
                     for (this.context_.matched_group_results[0..c]) |gr| {
                         if (std.mem.eql(u8, gr.name[0..gr.name_len], name)) {
@@ -2432,19 +2524,20 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 } else return null;
             }
 
-            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32) anyerror!Self {
                 if (pattern.len == 0) {
                     return JStringError.RegexBadPattern;
                 }
                 var context_ = try allocator.create(pcre.RegexContext);
                 context_.regex_options = regex_options;
-                context_.match_options = match_options;
                 const result = pcre.compile(context_, pattern[0..].ptr);
                 if (result == 0) {
                     pcre.get_last_error_message(context_);
                 } else {
-                    var mgrs = try allocator.alloc(pcre.RegexNamedGroupResult, context_.named_group_count);
-                    context_.matched_group_results = mgrs[0..].ptr;
+                    if (context_.matched_group_capacity > 0) {
+                        var mgrs = try allocator.alloc(pcre.RegexGroupResult, @as(usize, @intCast(context_.matched_group_capacity)));
+                        context_.matched_group_results = mgrs[0..].ptr;
+                    }
                 }
                 return Self{
                     .context_ = context_,
@@ -2455,50 +2548,34 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
 
             pub fn deinit(this: *Self, allocator: std.mem.Allocator) void {
                 defer allocator.destroy(this.context_);
-                pcre.free_context(this.context_);
-                var c: usize = 0;
-                if (this.context_.matched_results_capacity > 0) {
-                    c = @as(usize, @intCast(this.context_.matched_results_capacity));
-                    allocator.free(this.context_.matched_results[0..c]);
+                if (this.total_matched_results > 0) {
+                    allocator.free(this.matched_results);
                 }
-                if (this.context_.matched_group_count > 0) {
-                    c = @as(usize, @intCast(this.context_.matched_group_count));
-                    for (this.context_.matched_group_results[0..c]) |matched_group_result| {
-                        const l = matched_group_result.name_len;
-                        allocator.free(matched_group_result.name[0..l]);
-                    }
+                if (this.total_matched_group_results > 0) {
+                    allocator.free(this.matched_group_results);
+                }
+                if (this.context_.matched_group_capacity > 0) {
+                    const c = @as(usize, @intCast(this.context_.matched_group_capacity));
                     allocator.free(this.context_.matched_group_results[0..c]);
                 }
+                // this must be at last as it will reset context_ from c code
+                pcre.free_context(this.context_);
             }
 
             /// reset regex for next new match. This will only reset matched_results & matched_group_results & free
             /// pcre underlying match object.
             pub fn reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {
-                var c: usize = 0;
-                if (this.context_.matched_results_capacity > 0) {
-                    c = @as(usize, @intCast(this.context_.matched_results_capacity));
-                    allocator.free(this.context_.matched_results[0..c]);
+                if (this.total_matched_results > 0) {
+                    allocator.free(this.matched_results);
+                    this.total_matched_results = 0;
                 }
-                if (this.context_.matched_group_count > 0) {
-                    c = @as(usize, @intCast(this.context_.matched_group_count));
-                    for (this.context_.matched_group_results[0..c]) |matched_group_result| {
-                        const l = matched_group_result.name_len;
-                        allocator.free(matched_group_result.name[0..l]);
-                    }
-                    allocator.free(this.context_.matched_group_results[0..c]);
+                if (this.total_matched_group_results > 0) {
+                    allocator.free(this.matched_group_results);
+                    this.total_matched_group_results = 0;
                 }
                 // order is important, must do after free matched_results & matched_group_results
                 // as pcre.free_for_next_match will reset them
                 pcre.free_for_next_match(this.context_);
-                try this._reset(allocator);
-            }
-
-            fn _reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {
-                this.context_.matched_results = null;
-                this.context_.matched_count = 0;
-                this.context_.matched_results_capacity = 0;
-                var mgrs = try allocator.alloc(pcre.RegexNamedGroupResult, this.context_.named_group_count);
-                this.context_.matched_group_results = mgrs[0..].ptr;
             }
 
             /// if not fetch_results, this.context_.next_offset is not set, need to manually do
@@ -2506,7 +2583,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here:
             /// https://regex101.com/
             pub fn match(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
-                this.context_.match_options &= match_options;
+                this.context_.match_options = match_options;
                 const m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset_pos);
                 if (m > 0) {
                     if (fetch_results) {
@@ -2519,7 +2596,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             /// must call after successful match, otherwise error
             pub fn getNextOffset(this: *Self, subject_slice: []const u8) anyerror!usize {
                 if (this.context_.with_match_result == 1) {
-                    if (this.context_.matched_count > 0) {
+                    if (this.matchSucceed()) {
                         pcre.get_next_offset(this.context_, subject_slice[0..].ptr, subject_slice.len);
                         return this.context_.next_offset;
                     } else {
@@ -2532,21 +2609,20 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
 
             /// only for single match fetchResults lazily. For matchAll it will always fetch while match.
             pub fn fetchResults(this: *Self, allocator: std.mem.Allocator) anyerror!void {
-                if (this.context_.rc > 0) {
-                    // will only fetch when rc > 0 (which must equal matched_results_capacity), so this is ... relatively ... safe :)
-                    const matched_capacity = @as(usize, @intCast(this.context_.matched_results_capacity));
-                    const mrs = try allocator.alloc(pcre.RegexMatchResult, matched_capacity);
-                    this.context_.matched_results = mrs.ptr;
-                    pcre.prepare_named_groups(this.context_);
-                    if (this.context_.named_group_count > 0) {
-                        const named_group_count = @as(usize, @intCast(this.context_.named_group_count));
-                        for (0..named_group_count) |i| {
-                            const name_len = this.context_.matched_group_results[i].name_len;
-                            const name_slice = try allocator.alloc(u8, name_len);
-                            this.context_.matched_group_results[i].name = name_slice.ptr;
-                        }
-                    }
+                if (this.matchSucceed()) {
                     pcre.fetch_match_results(this.context_);
+                    if (this.context_.matched_count > 0) {
+                        this.matched_results = try allocator.alloc(pcre.RegexMatchResult, this.context_.matched_count);
+                        this.matched_results[0] = this.context_.matched_result;
+                        this.total_matched_results = 1;
+                    }
+                    if (this.context_.matched_group_count > 0) {
+                        this.matched_group_results = try allocator.alloc(pcre.RegexGroupResult, this.context_.matched_group_count);
+                        for (0..this.context_.matched_group_count) |i| {
+                            this.matched_group_results[i] = this.context_.matched_group_results[i];
+                        }
+                        this.total_matched_group_results = this.context_.matched_group_count;
+                    }
                 }
             }
 
@@ -2554,9 +2630,11 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here:
             /// https://regex101.com/.
             pub fn matchAll(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, match_options: u32) anyerror!void {
-                this.context_.match_options &= match_options;
+                this.context_.match_options = match_options;
                 var m: i64 = 0;
                 var offset: usize = offset_pos;
+                var matched_result_count: usize = 0;
+                var matched_group_result_count: usize = 0;
                 while (offset < subject_slice.len) {
                     m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset);
                     if (m > 0) {
@@ -2565,34 +2643,38 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                             const n = try allocator.create(MatchedResultsList.Node);
                             n.data = matched_results;
                             this.matched_results_list.prepend(n);
-                            this.total_matched_results += matched_results.len;
+                            matched_result_count += matched_results.len;
+                            // set total_matched_results = 0 so later in reset it will not be freed
+                            this.total_matched_results = 0;
                         }
-                        if (this.getGroupResults()) |named_group_results| {
+                        if (this.getGroupResults()) |group_results| {
                             const n = try allocator.create(MatchedGroupResultsList.Node);
-                            n.data = named_group_results;
+                            n.data = group_results;
                             this.matched_group_results_list.prepend(n);
-                            this.total_matched_group_results += named_group_results.len;
+                            matched_group_result_count += group_results.len;
+                            // set total_matched_group_results = 0 so later in reset it will not be freed
+                            this.total_matched_group_results = 0;
                         }
                         pcre.get_next_offset(this.context_, subject_slice[0..].ptr, subject_slice.len);
                         offset = this.context_.next_offset;
-                        try this._reset(allocator);
+                        try this.reset(allocator);
                     } else break;
                 }
 
-                try this._mergeMatchedResults(allocator);
-                try this._mergeMatchedGroupResults(allocator);
-                if (this.context_.matched_count + this.context_.matched_group_count >= 0) {
-                    // as when exit from loop rc is definitely < 0, but if we have some reults accumulated, set to that
-                    this.context_.rc = this.context_.matched_count + this.context_.matched_group_count;
-                }
+                try this._mergeMatchedResults(allocator, matched_result_count);
+                try this._mergeMatchedGroupResults(allocator, matched_group_result_count);
             }
 
-            fn _mergeMatchedResults(this: *Self, allocator: std.mem.Allocator) anyerror!void {
-                const total_matched_results: usize = this.total_matched_results;
-                var merged_matched_results: []pcre.RegexMatchResult = undefined;
-
-                if (total_matched_results > 0) {
-                    merged_matched_results = try allocator.alloc(pcre.RegexMatchResult, total_matched_results);
+            fn _mergeMatchedResults(this: *Self, allocator: std.mem.Allocator, matched_count: usize) anyerror!void {
+                if (this.total_matched_results > 0) {
+                    allocator.free(this.matched_results);
+                }
+                this.total_matched_results = matched_count;
+                if (matched_count == 0) {
+                    return;
+                } else {
+                    var merged_matched_results: []pcre.RegexMatchResult = undefined;
+                    merged_matched_results = try allocator.alloc(pcre.RegexMatchResult, matched_count);
                     var offset: usize = merged_matched_results.len - 1;
                     brk: {
                         while (this.matched_results_list.popFirst()) |n| {
@@ -2609,24 +2691,20 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                             allocator.destroy(n);
                         }
                     }
+                    this.matched_results = merged_matched_results;
                 }
-
-                if (this.context_.matched_results_capacity > 0) {
-                    const old_matched_results = this.context_.matched_results[0..@as(usize, @intCast(this.context_.matched_results_capacity))];
-                    defer allocator.free(old_matched_results);
-                }
-
-                this.context_.matched_count = @as(i64, @intCast(total_matched_results));
-                this.context_.matched_results_capacity = @as(i64, @intCast(total_matched_results));
-                this.context_.matched_results = merged_matched_results.ptr;
             }
 
-            fn _mergeMatchedGroupResults(this: *Self, allocator: std.mem.Allocator) anyerror!void {
-                const total_matched_group_results: usize = this.total_matched_group_results;
-
-                var merged_matched_group_results: []pcre.RegexNamedGroupResult = undefined;
-                if (total_matched_group_results > 0) {
-                    merged_matched_group_results = try allocator.alloc(pcre.RegexNamedGroupResult, total_matched_group_results);
+            fn _mergeMatchedGroupResults(this: *Self, allocator: std.mem.Allocator, matched_group_count: usize) anyerror!void {
+                if (this.total_matched_group_results > 0) {
+                    allocator.free(this.matched_group_results);
+                }
+                this.total_matched_group_results = matched_group_count;
+                if (matched_group_count == 0) {
+                    return;
+                } else {
+                    var merged_matched_group_results: []pcre.RegexGroupResult = undefined;
+                    merged_matched_group_results = try allocator.alloc(pcre.RegexGroupResult, matched_group_count);
                     var offset: usize = merged_matched_group_results.len - 1;
                     brk: {
                         while (offset > 0) {
@@ -2645,15 +2723,8 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                             }
                         }
                     }
+                    this.matched_group_results = merged_matched_group_results;
                 }
-
-                if (this.context_.named_group_count > 0) {
-                    const old_matched_group_results = this.context_.matched_group_results[0..@as(usize, @intCast(this.context_.named_group_count))];
-                    defer allocator.free(old_matched_group_results);
-                }
-
-                this.context_.matched_group_count = @as(i64, @intCast(total_matched_group_results));
-                this.context_.matched_group_results = merged_matched_group_results.ptr;
             }
         };
     } else {
@@ -2902,31 +2973,33 @@ test "ArenaAllocator" {
 test "constructors" {
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
-    try testing.expectEqual(str1.len(), 0);
-    const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
-    try testing.expectEqual(str2.len(), 11);
-    const str3 = try JStringUnmanaged.newFromJStringUnmanaged(arena.allocator(), str2);
-    try testing.expectEqual(str3.len(), 11);
-    const str4 = try JStringUnmanaged.newFromFormat(arena.allocator(), "{s}", .{"jstring"});
-    try testing.expectEqual(str4.len(), 7);
-    const str5 = try JStringUnmanaged.newFromTuple(arena.allocator(), .{ "jstring", 5 });
-    try testing.expectEqual(str5.len(), 8);
-    const str6 = try JStringUnmanaged.newFromNumber(arena.allocator(), i32, -5);
-    try testing.expect(str6.eqlSlice("-5"));
-    const str7 = try JStringUnmanaged.newFromNumber(arena.allocator(), f32, -5.5);
-    try testing.expect(str7.eqlSlice("-5.5"));
-    const TestType = struct { a: i32, b: []const u8 };
-    const str8 = try JStringUnmanaged.newFromStringify(arena.allocator(), TestType{ .a = 123, .b = "xy" });
-    try testing.expect(str8.eqlSlice("{\"a\":123,\"b\":\"xy\"}"));
-    const str9 = try JStringUnmanaged.newFromStringifyWithOptions(arena.allocator(), TestType{ .a = 123, .b = "xy" }, .{ .whitespace = .indent_2 });
-    const str9value =
-        \\{
-        \\  "a": 123,
-        \\  "b": "xy"
-        \\}
-    ;
-    try testing.expect(str9.eqlSlice(str9value));
+    {
+        const str1 = try JStringUnmanaged.newEmpty(arena.allocator());
+        try testing.expectEqual(str1.len(), 0);
+        const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
+        try testing.expectEqual(str2.len(), 11);
+        const str3 = try JStringUnmanaged.newFromJStringUnmanaged(arena.allocator(), str2);
+        try testing.expectEqual(str3.len(), 11);
+        const str4 = try JStringUnmanaged.newFromFormat(arena.allocator(), "{s}", .{"jstring"});
+        try testing.expectEqual(str4.len(), 7);
+        const str5 = try JStringUnmanaged.newFromTuple(arena.allocator(), .{ "jstring", 5 });
+        try testing.expectEqual(str5.len(), 8);
+        const str6 = try JStringUnmanaged.newFromNumber(arena.allocator(), i32, -5);
+        try testing.expect(str6.eqlSlice("-5"));
+        const str7 = try JStringUnmanaged.newFromNumber(arena.allocator(), f32, -5.5);
+        try testing.expect(str7.eqlSlice("-5.5"));
+        const TestType = struct { a: i32, b: []const u8 };
+        const str8 = try JStringUnmanaged.newFromStringify(arena.allocator(), TestType{ .a = 123, .b = "xy" });
+        try testing.expect(str8.eqlSlice("{\"a\":123,\"b\":\"xy\"}"));
+        const str9 = try JStringUnmanaged.newFromStringifyWithOptions(arena.allocator(), TestType{ .a = 123, .b = "xy" }, .{ .whitespace = .indent_2 });
+        const str9value =
+            \\{
+            \\  "a": 123,
+            \\  "b": "xy"
+            \\}
+        ;
+        try testing.expect(str9.eqlSlice(str9value));
+    }
     {
         var tmp_dir = std.testing.tmpDir(.{});
         defer tmp_dir.cleanup();
@@ -2935,6 +3008,9 @@ test "constructors" {
         try tmp_file.seekTo(0);
         const str10 = try JStringUnmanaged.newFromFile(arena.allocator(), tmp_file);
         try testing.expect(str10.eqlSlice("hello,world"));
+        // now file is at the end, so read again should give us 0 len slice
+        const str11 = try JStringUnmanaged.newFromFile(arena.allocator(), tmp_file);
+        try testing.expect(str11.eqlSlice(""));
     }
 }
 
@@ -2955,7 +3031,7 @@ test "utils" {
         const str3 = try JStringUnmanaged.newFromJStringUnmanaged(arena.allocator(), str2);
         try testing.expect(str1.eqlSlice(""));
         try testing.expect(str1.isEmpty());
-        try testing.expect(str2.eqlJStringUmanaged(str3));
+        try testing.expect(str2.eql(str3));
         try testing.expect(str3.eqlSlice("hello,world"));
         const str4 = try str3.clone(arena.allocator());
         try testing.expect(str4.eqlSlice("hello,world"));
@@ -2974,6 +3050,13 @@ test "utils" {
         try testing.expect(strings2[0].eqlSlice("zig"));
         try testing.expect(strings2[1].eqlSlice("更好"));
     }
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), " zig 更好 \t 的c\t💯");
+        var wyhash = std.hash.Wyhash.init(0);
+        wyhash.update(" zig 更好 \t 的c\t💯");
+        const h = wyhash.final();
+        try testing.expectEqual(str1.hash(), h);
+    }
 }
 
 test "concat" {
@@ -2982,13 +3065,13 @@ test "concat" {
     const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,world");
     var str_array_buf: [256]JStringUnmanaged = undefined;
     str_array_buf[0] = str1;
-    const str2 = try str1.concat(arena.allocator(), str_array_buf[0..1]);
+    const str2 = try str1.concatMany(arena.allocator(), str_array_buf[0..1]);
     try testing.expect(str1.eqlSlice("hello,world" ** 1));
     try testing.expect(str2.eqlSlice("hello,world" ** 2));
     str_array_buf[1] = str2;
-    const str3 = try str1.concat(arena.allocator(), str_array_buf[0..2]);
+    const str3 = try str1.concatMany(arena.allocator(), str_array_buf[0..2]);
     try testing.expect(str3.eqlSlice("hello,world" ** 4));
-    const str4 = try str1.concat(arena.allocator(), str_array_buf[0..0]);
+    const str4 = try str1.concatMany(arena.allocator(), str_array_buf[0..0]);
     try testing.expect(str4.eqlSlice("hello,world"));
     try testing.expect(str4.str_slice.ptr != str1.str_slice.ptr);
     const str5 = try str1.concatFormat(arena.allocator(), "{s}", .{" jstring"});
@@ -3001,8 +3084,19 @@ test "concat" {
         optional_6,
         error1,
     });
-    // std.debug.print("\n{s}\n", .{str6.slice});
     try testing.expect(str6.eqlSlice("hello,world jstring56error.OutOfMemory"));
+    const str7 = try str1.concat(arena.allocator(), str1);
+    try testing.expect(str7.eqlSlice("hello,worldhello,world"));
+    const str8 = try str1.concatSlice(arena.allocator(), "hello");
+    try testing.expect(str8.eqlSlice("hello,worldhello"));
+    var some_slices: [1][]const u8 = undefined;
+    some_slices[0] = "hello";
+    const str9 = try str1.concatManySlices(arena.allocator(), &some_slices);
+    try testing.expect(str9.eqlSlice("hello,worldhello"));
+    const str10 = try str1.concatSlice(arena.allocator(), "");
+    try testing.expect(str10.eqlSlice("hello,world"));
+    const str11 = try str1.concatManySlices(arena.allocator(), some_slices[0..0]);
+    try testing.expect(str11.eqlSlice("hello,world"));
 }
 
 test "startsWith/endsWith" {
@@ -3280,48 +3374,46 @@ test "RegexUnmanged" {
         var arena = ArenaAllocator.init(testing.allocator);
         defer arena.deinit();
         {
-            const re = RegexUnmanaged.init(arena.allocator(), "", 0, 0);
+            const re = RegexUnmanaged.init(arena.allocator(), "", 0);
             try testing.expect(_testIsError(RegexUnmanaged, re, JStringError.RegexBadPattern));
         }
         {
-            const re = try RegexUnmanaged.init(arena.allocator(), "(hello", 0, 0);
+            const re = try RegexUnmanaged.init(arena.allocator(), "(hello", 0);
             try testing.expect(!re.succeed());
             try testing.expectEqual(re.errorNumber(), 114);
             try testing.expectEqual(re.errorOffset(), 6);
             try testing.expectEqualSlices(u8, re.errorMessage(), "PCRE2 compilation failed at offset 6: missing closing parenthesis\n");
         }
         {
-            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
+            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0);
             try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
             re.deinit(arena.allocator());
         }
         {
-            var re = try RegexUnmanaged.init(arena.allocator(), "(?<H>hel+o)", 0, 0);
+            var re = try RegexUnmanaged.init(arena.allocator(), "(?<H>hel+o)", 0);
             try re.matchAll(arena.allocator(), "hello,hello,world", 0, 0);
             re.deinit(arena.allocator());
         }
         {
-            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
+            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0);
             try testing.expectEqual(re.errorNumber(), 100);
             try re.match(arena.allocator(), "hello,hello,world", 0, true, 0);
-            try testing.expect(re.succeed());
+            try testing.expect(re.matchSucceed());
             const matched_results = re.getResults();
             try testing.expect(matched_results != null);
             if (matched_results) |mr| {
-                // std.debug.print("\n{d}\n", .{mr.len});
                 try testing.expect(mr[0].start == 0);
                 try testing.expect(mr[0].len == 5);
             }
         }
         {
-            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0, 0);
+            var re = try RegexUnmanaged.init(arena.allocator(), "hel+o", 0);
             try testing.expectEqual(re.errorNumber(), 100);
             try re.matchAll(arena.allocator(), "hello,hello,world", 0, 0);
-            try testing.expect(re.succeed());
+            try testing.expect(re.matchSucceed());
             const matched_results = re.getResults();
             try testing.expect(matched_results != null);
             if (matched_results) |mr| {
-                // std.debug.print("\n{d}\n", .{mr.len});
                 try testing.expect(mr.len == 2);
                 try testing.expect(mr[0].start == 0);
                 try testing.expect(mr[0].len == 5);
@@ -3330,10 +3422,10 @@ test "RegexUnmanged" {
             }
         }
         {
-            var re = try RegexUnmanaged.init(arena.allocator(), "(?<h>hel+o)", 0, 0);
+            var re = try RegexUnmanaged.init(arena.allocator(), "(?<h>hel+o)", 0);
             try testing.expectEqual(re.errorNumber(), 100);
             try re.matchAll(arena.allocator(), "hello,hello,world", 0, 0);
-            try testing.expect(re.succeed());
+            try testing.expect(re.matchSucceed());
             const matched_results = re.getResults();
             try testing.expect(matched_results != null);
             if (matched_results) |mr| {
@@ -3353,6 +3445,22 @@ test "RegexUnmanged" {
                 try testing.expectEqualSlices(u8, mgr[1].name[0..mgr[1].name_len], "h");
                 try testing.expect(mgr[1].start == 6);
                 try testing.expect(mgr[1].len == 5);
+            }
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "(?<h>hel+o)", 0);
+            try re.matchAll(arena.allocator(), "hello,hello,world", 0, 0);
+            re.deinit(arena.allocator());
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try re.match(arena.allocator(), "hi,hello", 0, true, 0);
+            const match_results = re.getResults();
+            const group_results = re.getGroupResults();
+            _ = group_results;
+            if (match_results) |mrs| {
+                try testing.expectEqual(mrs[0].start, 0);
+                try testing.expectEqual(mrs[0].len, 8);
             }
         }
     }
@@ -3542,6 +3650,48 @@ test "replace/replaceAll/replaceByRegex/replaceAllByRegex" {
     }
 }
 
+test "freeJStringArray/freeJStringUnmanagedArray" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        const cwd = std.fs.cwd();
+        const f = try cwd.openFile("src/jstring.zig", .{});
+        var str1 = try JStringUnmanaged.newFromFile(arena.allocator(), f);
+        const strs = try str1.split(arena.allocator(), "\n", -1);
+        freeJStringUnmanagedArray(arena.allocator(), strs);
+    }
+    {
+        const cwd = std.fs.cwd();
+        const f = try cwd.openFile("src/jstring.zig", .{});
+        var str1 = try JString.newFromFile(arena.allocator(), f);
+        const strs = try str1.split("\n", -1);
+        freeJStringArray(strs);
+    }
+}
+
+test "JString/Regex" {
+    // briefly test managed version, to make sure that they follow the the spec designed. Majority functions are tested in unmanaged version.
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    {
+        var str1 = try JString.newEmpty(arena.allocator());
+        const str2 = try JString.newFromSlice(arena.allocator(), "hello,💯world");
+        str1 = try str1.repeat(5);
+        var jstrings: [1]JString = undefined;
+        jstrings[0] = str2;
+        var str3 = try str1.concatMany(jstrings[0..1]);
+        try testing.expect(str3.eqlSlice("hello,💯world"));
+        str3 = try str1.concatMany(jstrings[0..0]);
+        try testing.expect(str3.eqlSlice(""));
+        str3 = try str1.concat(str2);
+        try testing.expect(str3.eqlSlice("hello,💯world"));
+        str3 = try str2.clone();
+        try testing.expect(str3.eqlSlice("hello,💯world"));
+        try testing.expect(!str3.isEmpty());
+        try testing.expect(str3.eql(str2));
+    }
+}
+
 test "forbidden city" {
     // tests listed here are those necessary to better coverage but not supposed to be used if not developing this lib
     // just remember that: in practice if you call this you will be fired (not me), or they are tested here does not
@@ -3558,15 +3708,22 @@ test "forbidden city" {
         try testing.expectEqual(_sliceAt(u8, "hello", -1), 'o');
         try testing.expect(!_testIsError(u8, 'h', JStringError.RegexMatchFailed));
     }
+    {
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello 💯world");
+        const strs = try str1._splitToUtf8Chars(arena.allocator(), 999, false);
+        defer freeJStringUnmanagedArray(arena.allocator(), strs);
+        try testing.expectEqual(strs.len, 11);
+        try testing.expect(strs[5].eqlSlice("💯"));
+    }
     if (enable_pcre) {
         {
-            var re = try RegexUnmanaged.init(arena.allocator(), "pattern", 0, 0);
+            var re = try RegexUnmanaged.init(arena.allocator(), "pattern", 0);
             var it = re.getResultsIterator("something");
             _ = &it;
             try testing.expectEqual(it.nextResult(), null);
         }
         {
-            var re = try RegexUnmanaged.init(arena.allocator(), "pattern", 0, 0);
+            var re = try RegexUnmanaged.init(arena.allocator(), "pattern", 0);
             _ = &re;
             pcre.fetch_match_results(re.context_); // no panic means passed
             const str = "hello";
@@ -3579,6 +3736,13 @@ test "forbidden city" {
             _ = &re;
             const str = "hello";
             _ = pcre.match(re.context_, str[0..].ptr, str.len, 0); // no panic means passed
+        }
+        {
+            // var re = try RegexUnmanaged.init(arena.allocator(), "(?<h>hel+o)", 0, 0);
+            // try re.matchAll(arena.allocator(), "hello", 0, 0);
+            // const it = _MatchedGapIterator.init(re, "hello");
+            // var g = it.nextGap();
+            // g = it.nextGap();
         }
     }
 }

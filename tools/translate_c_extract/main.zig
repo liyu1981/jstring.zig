@@ -124,9 +124,9 @@ const HeaderParser = struct {
         return HeaderParser{
             .file_name = try file_name.clone(),
             .header_provides = ProvideHashMap.init(allocator),
-            .re_block_open = try Regex.init(allocator, "translate-c provide-begin:\\s\\/(?<pattern>.+)\\/", 0, 0),
-            .re_block_close = try Regex.init(allocator, "translate-c provide-end:\\s\\/(?<pattern>.+)\\/", 0, 0),
-            .re_provide = try Regex.init(allocator, "translate-c provide:\\s(?<tk>\\S+)", 0, 0),
+            .re_block_open = try Regex.init(allocator, "translate-c provide-begin:\\s\\/(?<pattern>.+)\\/", 0),
+            .re_block_close = try Regex.init(allocator, "translate-c provide-end:\\s\\/(?<pattern>.+)\\/", 0),
+            .re_provide = try Regex.init(allocator, "translate-c provide:\\s(?<tk>\\S+)", 0),
         };
     }
 

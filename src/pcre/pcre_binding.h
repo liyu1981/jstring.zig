@@ -61,13 +61,21 @@ typedef struct {
     size_t len;
 } RegexMatchResult;
 
-// translate-c provide: RegexNamedGroupResult
+// translate-c provide: RegexGroupName
 typedef struct {
     char* name;
     size_t name_len;
+    size_t index;
+} RegexGroupName;
+
+// translate-c provide: RegexGroupResult
+typedef struct {
+    char* name;
+    size_t name_len;
+    size_t index;
     size_t start;
     size_t len;
-} RegexNamedGroupResult;
+} RegexGroupResult;
 
 // translate-c provide: RegexContext
 typedef struct {
@@ -80,17 +88,19 @@ typedef struct {
     uint32_t match_options;
 
     uint8_t with_match_result;
-    uint32_t named_group_count;
     size_t next_offset;
     size_t origin_offset;
     int64_t rc;
 
-    int64_t matched_count;
-    int64_t matched_results_capacity;
-    RegexMatchResult* matched_results;
+    RegexGroupName* group_names;
+    size_t group_name_count;
 
-    int64_t matched_group_count;
-    RegexNamedGroupResult* matched_group_results;
+    size_t matched_count;
+    RegexMatchResult matched_result;
+
+    size_t matched_group_count;
+    size_t matched_group_capacity;
+    RegexGroupResult* matched_group_results;
 
     void* re;
     void* match_data;
@@ -104,8 +114,6 @@ uint8_t compile(RegexContext* context, const unsigned char* pattern);
 void free_context(RegexContext* context);
 // translate-c provide: match
 int64_t match(RegexContext* context, const unsigned char* subject, size_t subject_len, size_t start_offset);
-// translate-c provide: prepare_named_groups
-void prepare_named_groups(RegexContext* context);
 // translate-c provide: fetch_match_results
 void fetch_match_results(RegexContext* context);
 // translate-c provide: get_next_offset
