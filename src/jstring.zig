@@ -1544,13 +1544,19 @@ pub const JStringUnmanaged = struct {
         return this.indexOf(pattern, offset);
     }
 
-    /// This function is searching by regex so it requires allocator.
+    /// This function is searching by regex so it requires allocator. If the pattern is valid, will return first matched
+    /// start or -1 (when there is no match). Buf if the pattern itself has problem, will return
+    /// `JStringError.RegexMatchFailed`.
     pub fn searchByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize) anyerror!isize {
         if (enable_pcre) {
             var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions);
             try re.match(allocator, this.str_slice, offset, true, RegexUnmanaged.DefaultMatchOptions);
             defer re.deinit(allocator);
-            if (re.succeed() and re.matchSucceed()) {
+            if (!re.succeed()) {
+                // This usually means there is a problem in the pattern, so we reports back instead of returning -1
+                return JStringError.RegexMatchFailed;
+            }
+            if (re.matchSucceed()) {
                 const maybe_results = re.getResults();
                 if (maybe_results) |results| {
                     return @as(isize, @intCast(results[0].start));
@@ -2667,7 +2673,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
 
             fn _mergeMatchedResults(this: *Self, allocator: std.mem.Allocator, matched_count: usize) anyerror!void {
                 if (this.total_matched_results > 0) {
-                    allocator.free(this.matched_results);
+                    @panic("must not enter this function before reset");
                 }
                 this.total_matched_results = matched_count;
                 if (matched_count == 0) {
@@ -2697,7 +2703,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
 
             fn _mergeMatchedGroupResults(this: *Self, allocator: std.mem.Allocator, matched_group_count: usize) anyerror!void {
                 if (this.total_matched_group_results > 0) {
-                    allocator.free(this.matched_group_results);
+                    @panic("must not enter this function before reset");
                 }
                 this.total_matched_group_results = matched_group_count;
                 if (matched_group_count == 0) {
@@ -2707,20 +2713,18 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                     merged_matched_group_results = try allocator.alloc(pcre.RegexGroupResult, matched_group_count);
                     var offset: usize = merged_matched_group_results.len - 1;
                     brk: {
-                        while (offset > 0) {
-                            while (this.matched_group_results_list.popFirst()) |n| {
-                                for (1..n.data.len + 1) |i| {
-                                    merged_matched_group_results[offset] = n.data[n.data.len - i];
-                                    if (offset == 0) {
-                                        allocator.free(n.data);
-                                        allocator.destroy(n);
-                                        break :brk;
-                                    }
-                                    offset -= 1;
+                        while (this.matched_group_results_list.popFirst()) |n| {
+                            for (1..n.data.len + 1) |i| {
+                                merged_matched_group_results[offset] = n.data[n.data.len - i];
+                                if (offset == 0) {
+                                    allocator.free(n.data);
+                                    allocator.destroy(n);
+                                    break :brk;
                                 }
-                                allocator.free(n.data);
-                                allocator.destroy(n);
+                                offset -= 1;
                             }
+                            allocator.free(n.data);
+                            allocator.destroy(n);
                         }
                     }
                     this.matched_group_results = merged_matched_group_results;
@@ -2832,57 +2836,74 @@ const _MatchedGapIterator = struct {
         if (this.maybe_result) |r| {
             if (this.maybe_group_result) |gr| {
                 if (r.start <= gr.start) {
-                    return this._nextGapFromIt();
+                    return this._nextGapFromIt(r);
                 } else {
-                    return this._nextGapFromGroupIt();
+                    return this._nextGapFromGroupIt(gr);
                 }
             } else {
-                return this._nextGapFromIt();
+                return this._nextGapFromIt(r);
             }
         }
-        if (this.maybe_group_result) |_| {
+        if (this.maybe_group_result) |gr| {
             // this.maybe_result must be null if we reach here, no need to check it
-            return this._nextGapFromGroupIt();
+            return this._nextGapFromGroupIt(gr);
         }
         return null;
     }
 
-    fn _nextGapFromIt(this: *_MatchedGapIterator) anyerror!?Gap {
-        if (this.maybe_result) |r| {
-            this.it_should_fetch = true;
-            if (this.last_start == r.start and this.last_len == r.len) {
-                return this.nextGap();
-            } else if (this.last_start + this.last_len > r.start) {
-                return JStringError.RegexMatchOverlapped;
-            } else {
-                this.last_start = r.start;
-                this.last_len = r.len;
-                return Gap{
-                    .start = r.start,
-                    .len = r.len,
-                };
-            }
+    fn _nextGapFromIt(this: *_MatchedGapIterator, r: RegexUnmanaged.MatchedResultIterator.Result) anyerror!?Gap {
+        this.it_should_fetch = true;
+        if (this.last_start == r.start and this.last_len == r.len) {
+            // can never reach here because we can reach here either
+            // 1. in front other other group result
+            // 2. or when move to next single match result
+            //
+            // for case 2, impossible to meet the condition, as match results will not overlap, and next match
+            //   result will never overlap last match's group result
+            // for case 1, impossible too, because either this is first match result, or we just move from last
+            //   match, so reduce to case 2
+            //
+            // return this.nextGap();
+            unreachable;
+        } else if (this.last_start + this.last_len > r.start) {
+            // see above, this is impossible too.
+            //
+            // return JStringError.RegexMatchOverlapped;
+            unreachable;
+        } else {
+            this.last_start = r.start;
+            this.last_len = r.len;
+            return Gap{
+                .start = r.start,
+                .len = r.len,
+            };
         }
-        unreachable;
     }
 
-    fn _nextGapFromGroupIt(this: *_MatchedGapIterator) anyerror!?Gap {
-        if (this.maybe_group_result) |gr| {
-            this.group_it_should_fetch = true;
-            if (this.last_start == gr.start and this.last_len == gr.len) {
-                return this.nextGap();
-            } else if (this.last_start + this.last_len > gr.start) {
-                return JStringError.RegexMatchOverlapped;
-            } else {
-                this.last_start = gr.start;
-                this.last_len = gr.len;
-                return Gap{
-                    .start = gr.start,
-                    .len = gr.len,
-                };
-            }
+    fn _nextGapFromGroupIt(this: *_MatchedGapIterator, gr: RegexUnmanaged.MatchedGroupResultIterator.Result) anyerror!?Gap {
+        this.group_it_should_fetch = true;
+        if (this.last_start == gr.start and this.last_len == gr.len) {
+            return this.nextGap();
+        } else if (this.last_start + this.last_len > gr.start) {
+            return JStringError.RegexMatchOverlapped;
+        } else {
+            // originally I wrote down:
+            //
+            // this.last_start = gr.start;
+            // this.last_len = gr.len;
+            // return Gap{
+            //     .start = gr.start,
+            //     .len = gr.len,
+            // };
+            //
+            // but this can never happen, because if we reach here, means we find a group result outside of
+            // 1. all match results
+            // 2. all other group results
+            // where 2. be always true (as groups are not overlapping), but for 1., at least one match result must
+            // cover our group (as how pcre works). So, we can never reach here.
+            //
+            unreachable;
         }
-        unreachable;
     }
 };
 
@@ -3463,6 +3484,45 @@ test "RegexUnmanged" {
                 try testing.expectEqual(mrs[0].len, 8);
             }
         }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try re.match(arena.allocator(), "hi,hello", 0, true, 0);
+            try re.reset(arena.allocator());
+            try re.match(arena.allocator(), "hi,hello", 0, true, 0);
+            const match_results = re.getResults();
+            const group_results = re.getGroupResults();
+            _ = group_results;
+            if (match_results) |mrs| {
+                try testing.expectEqual(mrs[0].start, 0);
+                try testing.expectEqual(mrs[0].len, 8);
+            }
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try re.matchAll(arena.allocator(), "hi,hello,hi,hello", 0, 0);
+            const match_results = re.getResults();
+            const group_results = re.getGroupResults();
+            if (match_results) |mrs| {
+                try testing.expectEqual(mrs[0].start, 0);
+                try testing.expectEqual(mrs[0].len, 8);
+                try testing.expectEqual(mrs[1].start, 9);
+                try testing.expectEqual(mrs[1].len, 8);
+            }
+            if (group_results) |grs| {
+                try testing.expectEqual(grs[0].start, 0);
+                try testing.expectEqual(grs[0].len, 3);
+                try testing.expectEqual(grs[1].start, 3);
+                try testing.expectEqual(grs[1].len, 5);
+                try testing.expectEqual(grs[2].start, 9);
+                try testing.expectEqual(grs[2].len, 3);
+                try testing.expectEqual(grs[3].start, 12);
+                try testing.expectEqual(grs[3].len, 5);
+            }
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try re.reset(arena.allocator()); // this should works find without error
+        }
     }
 }
 
@@ -3522,6 +3582,10 @@ test "searchByRegex" {
             var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello,hello,world");
             const r = try str1.searchByRegex(arena.allocator(), "nonexist", 0);
             try testing.expectEqual(r, -1);
+        }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+            try testing.expect(_testIsError(isize, str1.searchByRegex(arena.allocator(), "he(?<L>l+", 0), JStringError.RegexMatchFailed));
         }
     }
 }
@@ -3647,6 +3711,10 @@ test "replace/replaceAll/replaceByRegex/replaceAllByRegex" {
             const r = str1.replaceByRegex(arena.allocator(), "helloworld", "");
             try testing.expect(_testIsError(JStringUnmanaged, r, JStringError.RegexMatchFailed));
         }
+        {
+            var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+            try testing.expect(_testIsError(JStringUnmanaged, str1.replaceAllByRegex(arena.allocator(), "he(?<L>l+", ""), JStringError.RegexMatchFailed));
+        }
     }
 }
 
@@ -3736,13 +3804,6 @@ test "forbidden city" {
             _ = &re;
             const str = "hello";
             _ = pcre.match(re.context_, str[0..].ptr, str.len, 0); // no panic means passed
-        }
-        {
-            // var re = try RegexUnmanaged.init(arena.allocator(), "(?<h>hel+o)", 0, 0);
-            // try re.matchAll(arena.allocator(), "hello", 0, 0);
-            // const it = _MatchedGapIterator.init(re, "hello");
-            // var g = it.nextGap();
-            // g = it.nextGap();
         }
     }
 }

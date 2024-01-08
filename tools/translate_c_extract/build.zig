@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "translate-c-extract",
+        .name = "translate_c_extract",
         .root_source_file = .{ .path = "main.zig" },
         .target = target,
         .optimize = optimize,

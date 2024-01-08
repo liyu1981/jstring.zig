@@ -15,8 +15,8 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug translate-c-extract",
-      "program": "${workspaceFolder}/tools/translate_c_extract/zig-out/bin/translate-c-extract",
+      "name": "Debug translate_c_extract",
+      "program": "${workspaceFolder}/tools/translate_c_extract/zig-out/bin/translate_c_extract",
       "args": [
         "/Users/bytedance/DevCamp/jstring/src/pcre/pcre_binding.h",
         "/Users/bytedance/DevCamp/jstring/src/pcre/pcre_binding.autogen.zig"
