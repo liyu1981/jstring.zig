@@ -22,6 +22,14 @@
         "/Users/bytedance/DevCamp/jstring/src/pcre/pcre_binding.autogen.zig"
       ],
       "cwd": "${workspaceFolder}/tools/translate_c_extract"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug kcovz",
+      "program": "${workspaceFolder}/tools/kcovz/zig-out/bin/kcovz",
+      "args": ["/Users/bytedance/DevCamp/jstring/zig-out/bin/pcre_test"],
+      "cwd": "${workspaceFolder}"
     }
   ]
 }
