@@ -1182,6 +1182,10 @@ pub const JStringUnmanaged = struct {
             }
         }
 
+        if (this.str_slice.len < needle_slice.len) {
+            return -1;
+        }
+
         var occurence: isize = -1;
         const haystack_slice = this.str_slice[pos..];
         var k: usize = 0;
@@ -3722,16 +3726,12 @@ test "freeJStringArray/freeJStringUnmanagedArray" {
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     {
-        const cwd = std.fs.cwd();
-        const f = try cwd.openFile("src/jstring.zig", .{});
-        var str1 = try JStringUnmanaged.newFromFile(arena.allocator(), f);
+        var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello\nhello\nhello\n");
         const strs = try str1.split(arena.allocator(), "\n", -1);
         freeJStringUnmanagedArray(arena.allocator(), strs);
     }
     {
-        const cwd = std.fs.cwd();
-        const f = try cwd.openFile("src/jstring.zig", .{});
-        var str1 = try JString.newFromFile(arena.allocator(), f);
+        var str1 = try JString.newFromSlice(arena.allocator(), "hello\nhello\nhello\n");
         const strs = try str1.split("\n", -1);
         freeJStringArray(strs);
     }

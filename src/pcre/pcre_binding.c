@@ -75,9 +75,9 @@ uint8_t compile(RegexContext* context, const unsigned char* pattern) {
         if (group_name_count > 0) {
             context->group_names = (RegexGroupName*)malloc(sizeof(RegexGroupName) * group_name_count);
             if (context->group_names == NULL) {
-                fprintf(stderr, "memory allocation for group names(%d) failed! Abort!", group_name_count);
-                raise(SIGABRT);
-            }
+                fprintf(stderr, "memory allocation for group names(%d) failed! Abort!", group_name_count); /* no-cover */
+                raise(SIGABRT);                                                                            /* no-cover */
+            }                                                                                              /* no-cover */
 
             PCRE2_SPTR name_table;
             uint32_t name_entry_size;
@@ -94,9 +94,9 @@ uint8_t compile(RegexContext* context, const unsigned char* pattern) {
                 group_name_ptr->name_len = strlen((const char*)tabptr + 2);          // pcre group name is 0 terminated
                 group_name_ptr->name = (char*)malloc(group_name_ptr->name_len + 1);  // +1 for the zero sentinel
                 if (group_name_ptr->name == NULL) {
-                    fprintf(stderr, "memory allocation for group name (%d bytes) failed! Abort!", (int)group_name_ptr->name_len);
-                    raise(SIGABRT);
-                }
+                    fprintf(stderr, "memory allocation for group name (%d bytes) failed! Abort!", (int)group_name_ptr->name_len); /* no-cover */
+                    raise(SIGABRT);                                                                                               /* no-cover */
+                }                                                                                                                 /* no-cover */
                 sprintf(group_name_ptr->name, "%s", tabptr + 2);
                 group_name_ptr->name[group_name_ptr->name_len + 1] = 0;
                 tabptr += name_entry_size;  // move to next entry
