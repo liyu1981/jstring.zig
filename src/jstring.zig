@@ -270,7 +270,7 @@ pub const JString = struct {
             var rest_items_unmanaged_jstring = try JStringUnmanaged.newFromFormat(this.allocator, fmt, rest_items);
             defer rest_items_unmanaged_jstring.deinit(this.allocator);
             var rest_items_jstrings = [1]JString{JString{ .allocator = this.allocator, .unmanaged = rest_items_unmanaged_jstring }};
-            return this.concat(&rest_items_jstrings);
+            return this.concatMany(&rest_items_jstrings);
         }
     }
 
@@ -341,13 +341,13 @@ pub const JString = struct {
     }
 
     pub inline fn fastIndexOf(this: *const JString, needle_slice: []const u8, pos: usize) anyerror!isize {
-        return this.unmanaged.fastsIndexof(this.allocator, needle_slice, pos);
+        return this.unmanaged.fastIndexOf(this.allocator, needle_slice, pos);
     }
 
     // ** isWellFormed
 
-    pub fn isWellFormed(this: *const JString) bool {
-        return this.unmananged.isWellFormed();
+    pub fn isWellFormed(this: *JString) bool {
+        return this.unmanaged.isWellFormed();
     }
 
     // ** lastIndexOf
@@ -384,7 +384,10 @@ pub const JString = struct {
 
     pub inline fn matchAll(this: *const JString, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) anyerror!Regex {
         if (enable_pcre) {
-            return this.unmanaged.matchAll(this.allocator, pattern, offset, regex_options, match_options);
+            return Regex{
+                .allocator = this.allocator,
+                .unmanaged = try this.unmanaged.matchAll(this.allocator, pattern, offset, regex_options, match_options),
+            };
         } else {
             @compileError("disabled by comptime var `enable_pcre`, set it true to enable.");
         }
@@ -466,8 +469,8 @@ pub const JString = struct {
 
     pub inline fn replaceAllByRegex(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
         return JString{
-            .allocator = this.allcator,
-            .unmanaged = try this.unmanaged.repalceAllByRegex(this.allocator, pattern, replacement_slice),
+            .allocator = this.allocator,
+            .unmanaged = try this.unmanaged.replaceAllByRegex(this.allocator, pattern, replacement_slice),
         };
     }
 
@@ -591,7 +594,7 @@ pub const JString = struct {
     pub fn trimEnd(this: *const JString) anyerror!JString {
         return JString{
             .allocator = this.allocator,
-            .unmanaged = try this.trimEnd(this.allocator),
+            .unmanaged = try this.unmanaged.trimEnd(this.allocator),
         };
     }
 
@@ -600,7 +603,7 @@ pub const JString = struct {
     pub fn trimStart(this: *const JString) anyerror!JString {
         return JString{
             .allocator = this.allocator,
-            .unmanaged = try this.trimStart(this.allocator),
+            .unmanaged = try this.unmanaged.trimStart(this.allocator),
         };
     }
 
@@ -1241,11 +1244,11 @@ pub const JStringUnmanaged = struct {
     // ** isWellFormed
 
     /// similar to definition in javascript, but with difference that we are checking utf8.
-    pub fn isWellFormed(this: *const JStringUnmanaged) bool {
-        switch (this.utf8Len()) {
-            .Error => return false,
-            else => return true,
-        }
+    pub fn isWellFormed(this: *JStringUnmanaged) bool {
+        _ = this.utf8Len() catch {
+            return false;
+        };
+        return true;
     }
 
     // ** lastIndexOf
@@ -2326,6 +2329,10 @@ fn defineRegex(comptime with_pcre: bool) type {
                 return this.unmanaged.getGroupResults();
             }
 
+            pub inline fn getGroupResultByIndex(this: *const Self, index: usize) ?pcre.RegexGroupResult {
+                return this.unmanaged.getGroupResultByIndex(index);
+            }
+
             pub inline fn getGroupResultByName(this: *const Self, name: []const u8) ?pcre.RegexGroupResult {
                 return this.unmanaged.getGroupResultByName(name);
             }
@@ -2351,11 +2358,11 @@ fn defineRegex(comptime with_pcre: bool) type {
             }
 
             pub inline fn fetchResults(this: *Self) anyerror!void {
-                this.unmanaged.fetchResults();
+                try this.unmanaged.fetchResults(this.allocator);
             }
 
             pub inline fn matchAll(this: *Self, subject_slice: []const u8, offset_pos: usize, match_options: u32) anyerror!void {
-                this.unmanaged.matchAll(subject_slice, offset_pos, match_options);
+                try this.unmanaged.matchAll(this.allocator, subject_slice, offset_pos, match_options);
             }
         };
     } else {
@@ -2441,7 +2448,8 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                         if (this.cur_pos < group_results.len) {
                             const start = group_results[this.cur_pos].start;
                             const len = group_results[this.cur_pos].len;
-                            const name = group_results[this.cur_pos].name[0..group_results[this.cur_pos].name_len];
+                            const name_len = group_results[this.cur_pos].name_len;
+                            const name = if (name_len > 0) group_results[this.cur_pos].name[0..group_results[this.cur_pos].name_len] else "";
                             this.cur_pos += 1;
                             return Result{
                                 .start = start,
@@ -2512,8 +2520,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
 
             pub fn getGroupResultByIndex(this: *const Self, index: usize) ?pcre.RegexGroupResult {
                 if (this.total_matched_group_results > 0) {
-                    const c = @as(usize, @intCast(this.context_.matched_group_count));
-                    for (this.context_.matched_group_results[0..c]) |gr| {
+                    for (this.matched_group_results[0..this.total_matched_group_results]) |gr| {
                         if (gr.index == index) {
                             return gr;
                         }
@@ -2523,10 +2530,12 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             }
 
             pub fn getGroupResultByName(this: *const Self, name: []const u8) ?pcre.RegexGroupResult {
+                if (name.len == 0) {
+                    @panic("name for getGroupResultByName must not be empty!");
+                }
                 if (this.total_matched_group_results > 0) {
-                    const c = @as(usize, @intCast(this.context_.matched_group_count));
-                    for (this.context_.matched_group_results[0..c]) |gr| {
-                        if (std.mem.eql(u8, gr.name[0..gr.name_len], name)) {
+                    for (this.matched_group_results[0..this.total_matched_group_results]) |gr| {
+                        if (gr.name_len > 0 and std.mem.eql(u8, gr.name[0..gr.name_len], name)) {
                             return gr;
                         }
                     }
@@ -2613,7 +2622,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                         return this.context_.origin_offset;
                     }
                 } else {
-                    return JStringError.FetchBeforeMatch;
+                    return JStringError.RegexFetchBeforeMatch;
                 }
             }
 
@@ -2992,6 +3001,14 @@ test "ArenaAllocator" {
             // This retains the first allocated buffer
             try std.testing.expect(arena_allocator.reset(.{ .retain_with_limit = 1 }));
         }
+        {
+            var arena_allocator = ArenaAllocator.init(std.testing.allocator);
+            defer arena_allocator.deinit();
+            const a = arena_allocator.allocator();
+            var buf = try a.alloc(u8, 50);
+            buf = try a.realloc(buf, 100);
+            try testing.expectEqual(buf.len, 100);
+        }
     }
 }
 
@@ -3068,9 +3085,15 @@ test "utils" {
     }
     {
         var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), " zig 更好 \t 的c\t💯");
-        const strings1 = try str1.explode(arena.allocator(), -1);
+        var strings1 = try str1.explode(arena.allocator(), -1);
         try testing.expectEqual(strings1.len, 4);
-        const strings2 = try str1.explode(arena.allocator(), 2);
+        var strings2 = try str1.explode(arena.allocator(), 2);
+        try testing.expectEqual(strings2.len, 2);
+        try testing.expect(strings2[0].eqlSlice("zig"));
+        try testing.expect(strings2[1].eqlSlice("更好"));
+        strings1 = try str1.splitByWhiteSpace(arena.allocator(), -1);
+        try testing.expectEqual(strings1.len, 4);
+        strings2 = try str1.splitByWhiteSpace(arena.allocator(), 2);
         try testing.expectEqual(strings2.len, 2);
         try testing.expect(strings2[0].eqlSlice("zig"));
         try testing.expect(strings2[1].eqlSlice("更好"));
@@ -3200,7 +3223,6 @@ test "chartAt/at" {
         try testing.expect(_testIsError(u21, str1.at(100), error.IndexOutOfBounds));
         try testing.expect(_testIsError(u21, str1.at(-100), error.IndexOutOfBounds));
     }
-    {}
 }
 
 test "iterator/reverseIterator/utf8Iterator" {
@@ -3257,7 +3279,7 @@ test "padStart/padEnd" {
     }
 }
 
-test "indexOf/lastIndexOf/includes" {
+test "indexOf/lastIndexOf/includes/search" {
     var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     {
@@ -3292,6 +3314,11 @@ test "indexOf/lastIndexOf/includes" {
         // TODO: more kmp test cases
         const str2 = try JStringUnmanaged.newFromSlice(arena.allocator(), "GATCCATATG");
         try testing.expectEqual(str2.fastIndexOf(arena.allocator(), "ATAT", 0), 5);
+    }
+    {
+        const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), "hello");
+        try testing.expectEqual(str1.indexOf("hello,world", 0), -1);
+        try testing.expectEqual(str1.search("hello,world", 0), -1);
     }
 }
 
@@ -3500,6 +3527,19 @@ test "RegexUnmanged" {
                 try testing.expectEqual(mrs[0].start, 0);
                 try testing.expectEqual(mrs[0].len, 8);
             }
+            var it = re.getGroupResultsIterator("hi,hello");
+            var maybe_r = it.nextResult();
+            try testing.expect(maybe_r != null);
+            if (maybe_r) |r| {
+                try testing.expect(std.mem.eql(u8, r.name, ""));
+                try testing.expectEqual(r.start, 0);
+            }
+            maybe_r = it.nextResult();
+            try testing.expect(maybe_r != null);
+            if (maybe_r) |r| {
+                try testing.expect(std.mem.eql(u8, r.name, "h"));
+                try testing.expectEqual(r.start, 3);
+            }
         }
         {
             var re = try RegexUnmanaged.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
@@ -3526,6 +3566,39 @@ test "RegexUnmanged" {
         {
             var re = try RegexUnmanaged.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
             try re.reset(arena.allocator()); // this should works find without error
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try re.match(arena.allocator(), "hi,hello,hi,hello", 0, true, 0);
+            var maybe_r = re.getGroupResultByName("h");
+            try testing.expect(maybe_r != null);
+            if (maybe_r) |r| {
+                try testing.expectEqual(r.start, 3);
+                try testing.expectEqual(r.len, 5);
+            }
+            maybe_r = re.getGroupResultByName("hello");
+            try testing.expect(maybe_r == null);
+            var maybe_r2 = re.getGroupResultByIndex(1);
+            try testing.expect(maybe_r2 != null);
+            if (maybe_r2) |r| {
+                try testing.expectEqual(r.start, 0);
+                try testing.expectEqual(r.len, 3);
+            }
+            maybe_r2 = re.getGroupResultByIndex(100);
+            try re.reset(arena.allocator());
+            maybe_r = re.getGroupResultByName("h");
+            try testing.expect(maybe_r == null);
+            maybe_r2 = re.getGroupResultByIndex(1);
+            try testing.expect(maybe_r2 == null);
+        }
+        {
+            var re = try RegexUnmanaged.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try testing.expect(_testIsError(usize, re.getNextOffset("hello"), JStringError.RegexFetchBeforeMatch));
+            try re.match(arena.allocator(), "hi,hello,hi,hello", 0, true, 0);
+            try testing.expectEqual(re.getNextOffset("hi,hello,hi,hello"), 8);
+            try re.reset(arena.allocator());
+            try re.match(arena.allocator(), "notsomething", 0, true, 0);
+            try testing.expectEqual(re.getNextOffset("notsomething"), 0);
         }
     }
 }
@@ -3737,6 +3810,24 @@ test "freeJStringArray/freeJStringUnmanagedArray" {
     }
 }
 
+test "isWellFormed" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const str: []const u8 = "hello,💯";
+    var str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), str[0 .. str.len - 1]);
+    try testing.expect(!str1.isWellFormed());
+    str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), str);
+    try testing.expect(str1.isWellFormed());
+}
+
+test "valueOf" {
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const str: []const u8 = "hello,💯";
+    const str1 = try JStringUnmanaged.newFromSlice(arena.allocator(), str);
+    try testing.expect(std.mem.eql(u8, str1.valueOf(), "hello,💯"));
+}
+
 test "JString/Regex" {
     // briefly test managed version, to make sure that they follow the the spec designed. Majority functions are tested in unmanaged version.
     var arena = ArenaAllocator.init(testing.allocator);
@@ -3757,6 +3848,236 @@ test "JString/Regex" {
         try testing.expect(str3.eqlSlice("hello,💯world"));
         try testing.expect(!str3.isEmpty());
         try testing.expect(str3.eql(str2));
+        str3 = try JString.newFromJString(str2);
+        try testing.expect(str3.eqlSlice("hello,💯world"));
+        str3 = try JString.newFromFormat(arena.allocator(), "{s}!", .{str2});
+        try testing.expect(str3.eqlSlice("hello,💯world!"));
+        str3 = try JString.newFromTuple(arena.allocator(), .{ str2, "!" });
+        try testing.expect(str3.eqlSlice("hello,💯world!"));
+        str3 = try JString.newFromNumber(arena.allocator(), f32, 13.5);
+        try testing.expect(str3.eqlSlice("13.5"));
+        str3 = try JString.newFromStringify(arena.allocator(), .{ .hello = "world" });
+        try testing.expect(str3.eqlSlice("{\"hello\":\"world\"}"));
+        str3 = try JString.newFromStringifyWithOptions(arena.allocator(), .{ .hello = "world" }, .{});
+        try testing.expect(str3.eqlSlice("{\"hello\":\"world\"}"));
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        var tmp_file = try tmp_dir.dir.createFile("test.txt", .{ .read = true });
+        try tmp_file.writeAll("hello,world");
+        try tmp_file.seekTo(0);
+        const str10 = try JString.newFromFile(arena.allocator(), tmp_file);
+        try testing.expect(str10.eqlSlice("hello,world"));
+        // now file is at the end, so read again should give us 0 len slice
+        const str11 = try JString.newFromFile(arena.allocator(), tmp_file);
+        try testing.expect(str11.eqlSlice(""));
+    }
+    {
+        var str1 = try JString.newFromSlice(arena.allocator(), " zig 更好 \t 的c\t💯");
+        var wyhash = std.hash.Wyhash.init(0);
+        wyhash.update(" zig 更好 \t 的c\t💯");
+        const h = wyhash.final();
+        try testing.expectEqual(str1.hash(), h);
+        try testing.expectEqual(str1.len(), 23);
+        try testing.expectEqual(str1.utf8Len(), 14);
+    }
+    {
+        const str2 = try JString.newFromSlice(arena.allocator(), "ab");
+        var it2 = str2.iterator();
+        try testing.expectEqual(it2.next(), 'a');
+        var it3 = str2.reverseIterator();
+        try testing.expectEqual(it3.next(), 'b');
+        var str1 = try JString.newFromSlice(arena.allocator(), "zig更好的c💯");
+        var it1 = try str1.utf8Iterator();
+        try testing.expectEqual(it1.nextCodepoint(), 'z');
+    }
+    {
+        const str1 = try JString.newFromSlice(arena.allocator(), "hello");
+        var str2 = try str1.padStart(12, "welcome");
+        try testing.expect(str2.eqlSlice("welcomehello"));
+        str2 = try str1.padStartJString(12, &str1);
+        try testing.expect(str2.eqlSlice("lohellohello"));
+        str2 = try str1.padEnd(10, "world");
+        try testing.expect(str2.eqlSlice("helloworld"));
+        str2 = try str1.padEndJString(12, &str1);
+        try testing.expect(str2.eqlSlice("hellohellohe"));
+    }
+    {
+        const str2 = try JString.newFromSlice(arena.allocator(), "abcdefg");
+        try testing.expectEqual(str2.charAt(2), 'c');
+        var str1 = try JString.newFromSlice(arena.allocator(), "zig更好的c💯");
+        try testing.expectEqual(str1.at(-1), '💯');
+    }
+    {
+        var str1 = try JString.newFromSlice(arena.allocator(), " zig 更好 \t 的c\t💯");
+        var strings1 = try str1.explode(-1);
+        try testing.expectEqual(strings1.len, 4);
+        strings1 = try str1.splitByWhiteSpace(-1);
+        try testing.expectEqual(strings1.len, 4);
+    }
+    {
+        const str1 = try JString.newFromSlice(arena.allocator(), "hello,world");
+        var str_array_buf: [256]JString = undefined;
+        str_array_buf[0] = str1;
+        const str2 = try str1.concatMany(str_array_buf[0..1]);
+        try testing.expect(str2.eqlSlice("hello,world" ** 2));
+        var str5 = try str1.concatFormat("{s}", .{" jstring"});
+        try testing.expect(str5.eqlSlice("hello,world jstring"));
+        str5 = try str1.concatFormat("{s}", .{});
+        try testing.expect(str5.eqlSlice("hello,world"));
+        const optional_6: ?i32 = 6;
+        const error1 = _testCreateErrorUnion(false, i32, 0, error.OutOfMemory);
+        const str6 = try str1.concatTuple(.{
+            " jstring",
+            5,
+            optional_6,
+            error1,
+        });
+        try testing.expect(str6.eqlSlice("hello,world jstring56error.OutOfMemory"));
+        var some_slices: [1][]const u8 = undefined;
+        some_slices[0] = "hello";
+        const str9 = try str1.concatManySlices(&some_slices);
+        try testing.expect(str9.eqlSlice("hello,worldhello"));
+        const str8 = try str1.concatSlice("hello");
+        try testing.expect(str8.eqlSlice("hello,worldhello"));
+    }
+    {
+        var str1 = try JString.newFromSlice(arena.allocator(), "hello,world");
+        var str2 = try JString.newFromSlice(arena.allocator(), "hello");
+        try testing.expect(str1.startsWith(str2));
+        try testing.expect(!str1.endsWith(str2));
+        try testing.expect(str1.endsWithSlice("world"));
+        str1 = try JString.newFromSlice(arena.allocator(), "hello,worldhello,world");
+        try testing.expectEqual(str1.indexOf("hello", 0), 0);
+        try testing.expectEqual(str1.lastIndexOf("hello", 0), 11);
+        try testing.expect(!str1.includes("nothere", 0));
+        str2 = try JString.newFromSlice(arena.allocator(), "hello,worldhello,world");
+        try testing.expectEqual(str2.fastIndexOf("hello", 0), 0);
+        try testing.expectEqual(str2.fastLastIndexOf("hello", 0), 11);
+        try testing.expectEqual(str2.search("hello", 0), 0);
+    }
+    {
+        const str: []const u8 = "hello,💯";
+        var str1 = try JString.newFromSlice(arena.allocator(), str[0 .. str.len - 1]);
+        try testing.expect(!str1.isWellFormed());
+    }
+    {
+        var str1 = try JString.newFromSlice(arena.allocator(), "hello,hello,world");
+        var str2 = try str1.replace("world", "jstring");
+        try testing.expect(str2.eqlSlice("hello,hello,jstring"));
+        str2 = try str1.replaceAll("hello", "jstring");
+        try testing.expect(str2.eqlSlice("jstring,jstring,world"));
+    }
+    {
+        var str1 = try JString.newFromSlice(arena.allocator(), "hEllO,💯woRld");
+        const str2 = try str1.toUpperCase();
+        try testing.expect(str2.eqlSlice("HELLO,💯WORLD"));
+        const str3 = try str1.toLowerCase();
+        try testing.expect(str3.eqlSlice("hello,💯world"));
+    }
+    {
+        var str1 = try JString.newFromSlice(arena.allocator(), "  hello,world");
+        var str2 = try str1.trimStart();
+        try testing.expect(str2.eqlSlice("hello,world"));
+        str1 = try JString.newFromSlice(arena.allocator(), "hello,world  ");
+        str2 = try str1.trimEnd();
+        try testing.expect(str2.eqlSlice("hello,world"));
+        str1 = try JString.newFromSlice(arena.allocator(), "  hello,world  ");
+        str2 = try str1.trim();
+        try testing.expect(str2.eqlSlice("hello,world"));
+    }
+    {
+        var str1 = try JString.newFromSlice(arena.allocator(), "hello,world");
+        const str2 = try str1.sliceWithStartOnly(0);
+        try testing.expect(str2.eqlSlice("hello,world"));
+        const str6 = try str1.slice(15, 7);
+        try testing.expect(str6.eqlSlice(""));
+    }
+    if (enable_pcre) {
+        {
+            var str1 = try JString.newFromSlice(arena.allocator(), "hello,hello,world");
+            var re = try str1.match("hel+o", 0, true, Regex.DefaultRegexOptions, Regex.DefaultMatchOptions);
+            try testing.expect(re.matchSucceed());
+            var it = re.getResultsIterator(str1.valueOf());
+            const maybe_result = it.nextResult();
+            if (maybe_result) |r| {
+                try testing.expectEqual(r.start, 0);
+                try testing.expectEqual(r.len, 5);
+                try testing.expectEqualSlices(u8, r.value, "hello");
+            }
+            str1 = try JString.newFromSlice(arena.allocator(), "hello,hello,world");
+            re = try str1.matchAll("hel+o", 0, Regex.DefaultRegexOptions, Regex.DefaultMatchOptions);
+            try testing.expect(re.matchSucceed());
+        }
+        {
+            var str1 = try JString.newFromSlice(arena.allocator(), "hello,hello,world");
+            var str2 = try str1.replaceByRegex("wor.d", "jstring");
+            try testing.expect(str2.eqlSlice("hello,hello,jstring"));
+            str2 = try str1.replaceAllByRegex("hel+o", "jstring");
+            try testing.expect(str2.eqlSlice("jstring,jstring,world"));
+        }
+        {
+            var str1 = try JString.newFromSlice(arena.allocator(), "hello,hello,world");
+            const r = try str1.searchByRegex("hel+o", 0);
+            try testing.expectEqual(r, 0);
+        }
+        {
+            var str1 = try JString.newFromSlice(arena.allocator(), "hello,hello,world");
+            const results = try str1.splitByRegex("l+", 0, 0);
+            try testing.expectEqual(results.len, 1);
+        }
+        // Regex
+        {
+            var re = try Regex.init(arena.allocator(), "(hello", 0);
+            try testing.expect(!re.succeed());
+            try testing.expectEqual(re.errorNumber(), 114);
+            try testing.expectEqual(re.errorOffset(), 6);
+            try testing.expectEqualSlices(u8, re.errorMessage(), "PCRE2 compilation failed at offset 6: missing closing parenthesis\n");
+            re.deinit();
+        }
+        {
+            var re = try Regex.init(arena.allocator(), "(?<h>hel+o)", 0);
+            try re.matchAll("hello,hello,world", 0, 0);
+            const matched_results = re.getResults();
+            try testing.expect(matched_results != null);
+            if (matched_results) |mr| {
+                try testing.expect(mr[0].start == 0);
+                try testing.expect(mr[0].len == 5);
+            }
+            const matched_group_results = re.getGroupResults();
+            try testing.expect(matched_group_results != null);
+            if (matched_group_results) |mgr| {
+                try testing.expect(mgr.len == 2);
+                try testing.expectEqualSlices(u8, mgr[0].name[0..mgr[0].name_len], "h");
+                try testing.expect(mgr[0].start == 0);
+                try testing.expect(mgr[0].len == 5);
+            }
+        }
+        {
+            var re = try Regex.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try re.reset(); // this should works find without error
+        }
+        {
+            var re = try Regex.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try re.match("hi,hello,hi,hello", 0, true, 0);
+            const maybe_r = re.getGroupResultByName("h");
+            try testing.expect(maybe_r != null);
+            const maybe_r2 = re.getGroupResultByIndex(1);
+            try testing.expect(maybe_r2 != null);
+            var it = re.getGroupResultsIterator("hi,hello,hi,hello");
+            try testing.expect(it.nextResult() != null);
+        }
+        {
+            var re = try Regex.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try testing.expect(_testIsError(usize, re.getNextOffset("hello"), JStringError.RegexFetchBeforeMatch));
+            try re.match("hi,hello,hi,hello", 0, true, 0);
+            try testing.expectEqual(re.getNextOffset("hi,hello,hi,hello"), 8);
+        }
+        {
+            var re = try Regex.init(arena.allocator(), "(hi,)(?<h>hel+o?)", 0);
+            try re.match("hi,hello,hi,hello", 0, false, 0);
+            try re.fetchResults();
+            try testing.expectEqual(re.getNextOffset("hi,hello,hi,hello"), 8);
+        }
     }
 }
 
