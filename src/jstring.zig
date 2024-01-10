@@ -17,7 +17,6 @@ const enable_arena_allocator: bool = true;
 const enable_pcre: bool = true;
 
 // TODOs:
-//   * complete tests
 //   * arena allocator
 //   * benchmark
 //   * README + doc
@@ -1222,19 +1221,28 @@ pub const JStringUnmanaged = struct {
         const t = try _kmpBuildFailureTable(allocator, needle_slice);
         defer allocator.free(t);
 
-        var j: isize = 0;
-        for (0..haystack_slice.len) |i| {
-            if (_sliceAt(u8, haystack_slice, @as(isize, @intCast(i))) == _sliceAt(u8, needle_slice, j)) {
+        var j: usize = 0;
+        var k: usize = 0;
+        while (j < haystack_slice.len) {
+            if (needle_slice[k] == haystack_slice[j]) {
                 j += 1;
-                if (j >= needle_slice.len) {
-                    occurence = @as(isize, @intCast(i)) - j + 1;
+                k += 1;
+                if (k == needle_slice.len) {
                     if (!want_last) {
-                        return if (occurence >= 0) @as(isize, @intCast(pos)) + occurence else occurence;
+                        occurence = @as(isize, @intCast(j)) - @as(isize, @intCast(k));
+                        break;
+                    } else {
+                        occurence = @as(isize, @intCast(j)) - @as(isize, @intCast(k));
+                        k = if (t[k] >= 0) @as(usize, @intCast(t[k])) else unreachable;
                     }
-                    j = _sliceAt(isize, t, j);
                 }
-            } else if (j > 0) {
-                j = _sliceAt(isize, t, j);
+            } else {
+                if (t[k] < 0) {
+                    j += 1;
+                    k = @as(usize, @intCast(t[k] + 1));
+                } else {
+                    k = @as(usize, @intCast(t[k]));
+                }
             }
         }
 
@@ -2291,9 +2299,13 @@ fn defineRegex(comptime with_pcre: bool) type {
             pub const DefaultMatchOptions = RegexUnmanaged.DefaultMatchOptions;
 
             pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32) anyerror!Self {
+                return Self.initWithExtraRegexOptions(allocator, pattern, regex_options, 0);
+            }
+
+            pub fn initWithExtraRegexOptions(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, regex_extra_options: u32) anyerror!Self {
                 return Self{
                     .allocator = allocator,
-                    .unmanaged = try RegexUnmanaged.init(allocator, pattern, regex_options),
+                    .unmanaged = try RegexUnmanaged.initWithExtraRegexOptions(allocator, pattern, regex_options, regex_extra_options),
                 };
             }
 
@@ -2544,11 +2556,18 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             }
 
             pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32) anyerror!Self {
+                // last 0 means no extra regex options, which should be used 99% of time, unless you know
+                // this doc well: https://pcre.org/current/doc/html/pcre2api.html
+                return Self.initWithExtraRegexOptions(allocator, pattern, regex_options, 0);
+            }
+
+            pub fn initWithExtraRegexOptions(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, regex_extra_options: u32) anyerror!Self {
                 if (pattern.len == 0) {
                     return JStringError.RegexBadPattern;
                 }
                 var context_ = try allocator.create(pcre.RegexContext);
                 context_.regex_options = regex_options;
+                context_.regex_extra_options = regex_extra_options;
                 const result = pcre.compile(context_, pattern[0..].ptr);
                 if (result == 0) {
                     pcre.get_last_error_message(context_);
@@ -2933,16 +2952,22 @@ fn _kmpBuildFailureTable(allocator: std.mem.Allocator, needle_slice: []const u8)
     const t = try allocator.alloc(isize, (needle_slice.len + 1));
     @memset(t, 0);
 
-    var j: isize = 0;
-    for (1..needle_slice.len) |i| {
-        j = _sliceAt(isize, t, @as(isize, @intCast(i)));
-        while (j > 0 and _sliceAt(u8, needle_slice, @as(isize, @intCast(i))) != _sliceAt(u8, needle_slice, j)) {
-            j = _sliceAt(isize, t, j);
+    t[0] = -1;
+    var pos: usize = 1;
+    var cnd: isize = 0;
+    while (pos < needle_slice.len) {
+        if (needle_slice[pos] == needle_slice[@as(usize, @intCast(cnd))]) {
+            t[pos] = t[@as(usize, @intCast(cnd))];
+        } else {
+            t[pos] = cnd;
+            while (cnd >= 0 and needle_slice[pos] != needle_slice[@as(usize, @intCast(cnd))]) {
+                cnd = t[@as(usize, @intCast(cnd))];
+            }
         }
-        if (j > 0 or _sliceAt(u8, needle_slice, @as(isize, @intCast(i))) == _sliceAt(u8, needle_slice, j)) {
-            t[i + 1] = j + 1;
-        }
+        pos += 1;
+        cnd += 1;
     }
+    t[pos] = cnd;
 
     return t;
 }
@@ -3005,9 +3030,11 @@ test "ArenaAllocator" {
             var arena_allocator = ArenaAllocator.init(std.testing.allocator);
             defer arena_allocator.deinit();
             const a = arena_allocator.allocator();
-            var buf = try a.alloc(u8, 50);
-            buf = try a.realloc(buf, 100);
-            try testing.expectEqual(buf.len, 100);
+            var buf = try a.alloc(u8, 100);
+            buf = try a.realloc(buf, 50);
+            try testing.expectEqual(buf.len, 50);
+            buf = try a.realloc(buf, 60);
+            try testing.expectEqual(buf.len, 60);
         }
     }
 }
@@ -3600,6 +3627,29 @@ test "RegexUnmanged" {
             try re.match(arena.allocator(), "notsomething", 0, true, 0);
             try testing.expectEqual(re.getNextOffset("notsomething"), 0);
         }
+        {
+            // example mentioned at: https://www.pcre.org/current/doc/html/pcre2pattern.html about
+            // PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK
+            var re = try RegexUnmanaged.initWithExtraRegexOptions(arena.allocator(), "(?<=\\Kfoo)bar", 0, pcre.PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK);
+            try re.match(arena.allocator(), "foobar", 3, true, 0);
+            const offset = try re.getNextOffset("foobar");
+            try testing.expectEqual(offset, 6);
+            re.deinit(arena.allocator());
+        }
+        {
+            // this example will trigger the tricky case mentioned in pcre2 demo on get next offset.
+            // check https://pcre.org/current/doc/html/pcre2demo.html, line around comment "If the previous match was
+            // not an empty string, there is one tricky case to consider."
+            var re = try RegexUnmanaged.initWithExtraRegexOptions(arena.allocator(), "(?<=\\Kfoo)", pcre.PCRE2_UTF, pcre.PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK);
+            try re.match(arena.allocator(), "foobar", 3, true, 0);
+            var offset = try re.getNextOffset("foobar");
+            try testing.expectEqual(offset, 4);
+            try re.reset(arena.allocator());
+            try re.match(arena.allocator(), "foo", 3, true, 0);
+            offset = try re.getNextOffset("foo");
+            try testing.expectEqual(offset, 4);
+            re.deinit(arena.allocator());
+        }
     }
 }
 
@@ -4094,6 +4144,7 @@ test "forbidden city" {
         try testing.expect(str2.eqlSlice("hello,hello,world"));
     }
     {
+        try testing.expectEqual(_sliceAt(u8, "hello", 1), 'e');
         try testing.expectEqual(_sliceAt(u8, "hello", -1), 'o');
         try testing.expect(!_testIsError(u8, 'h', JStringError.RegexMatchFailed));
     }

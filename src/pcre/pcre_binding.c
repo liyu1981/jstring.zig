@@ -30,6 +30,7 @@ void reset_context(RegexContext* context) {
 
     // intentionally do not reset these 2 options
     // regex_options
+    // regex_extra_options
     // match_options
 
     context->with_match_result = FALSE;
@@ -49,18 +50,48 @@ void reset_context(RegexContext* context) {
 
     context->re = NULL;
     context->match_data = NULL;
+    context->compile_context = NULL;
 }
 
 uint8_t compile(RegexContext* context, const unsigned char* pattern) {
     reset_context(context);
 
-    pcre2_code* re = pcre2_compile(
-        pattern,
-        PCRE2_ZERO_TERMINATED,
-        context->regex_options,
-        &context->error_number,
-        &context->error_offset,
-        NULL);
+    pcre2_code* re;
+    pcre2_compile_context* compile_context;
+    int r;
+
+    if (context->regex_extra_options == 0) {
+        re = pcre2_compile(
+            pattern,
+            PCRE2_ZERO_TERMINATED,
+            context->regex_options,
+            &context->error_number,
+            &context->error_offset,
+            NULL);
+    } else {
+        compile_context = pcre2_compile_context_create(NULL);
+        if (compile_context == NULL) {
+            fprintf(stderr, "pcre2 compile context creation failed! Abort!"); /* no-cover */
+            raise(SIGABRT);                                                   /* no-cover */
+        }                                                                     /* no-cover */
+        r = pcre2_set_compile_extra_options(compile_context, context->regex_extra_options);
+
+        if (r != 0) {
+            fprintf(stderr, "pcre2 pcre2_set_compile_extra_options failed with %x! Abort!", context->regex_extra_options); /* no-cover */
+            raise(SIGABRT);                                                                                                /* no-cover */
+        }                                                                                                                  /* no-cover */
+
+        re = pcre2_compile(
+            pattern,
+            PCRE2_ZERO_TERMINATED,
+            context->regex_options,
+            &context->error_number,
+            &context->error_offset,
+            compile_context);
+
+        context->compile_context = (void*)compile_context;
+    }
+
     context->re = (void*)re;
 
     if (re != NULL) {
@@ -120,6 +151,9 @@ void free_context(RegexContext* context) {
     }
     if (context->match_data != NULL) {
         pcre2_match_data_free((pcre2_match_data*)context->match_data);
+    }
+    if (context->compile_context != NULL) {
+        pcre2_compile_context_free((pcre2_compile_context*)context->compile_context);
     }
     reset_context(context);
 }

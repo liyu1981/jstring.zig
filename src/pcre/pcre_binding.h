@@ -53,6 +53,14 @@ D   is inspected during pcre2_dfa_match() execution
 #define PCRE2_EXTENDED_MORE 0x01000000u       /* C       */
 #define PCRE2_LITERAL 0x02000000u             /* C       */
 #define PCRE2_MATCH_INVALID_UTF 0x04000000u   /*   J M D */
+
+#define PCRE2_EXTRA_ALLOW_SURROGATE_ESCAPES 0x00000001u /* C */
+#define PCRE2_EXTRA_BAD_ESCAPE_IS_LITERAL 0x00000002u   /* C */
+#define PCRE2_EXTRA_MATCH_WORD 0x00000004u              /* C */
+#define PCRE2_EXTRA_MATCH_LINE 0x00000008u              /* C */
+#define PCRE2_EXTRA_ESCAPED_CR_IS_LF 0x00000010u        /* C */
+#define PCRE2_EXTRA_ALT_BSUX 0x00000020u                /* C */
+#define PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK 0x00000040u    /* C */
 // translate-c provide-end: /#define\s(?<tk>\S+)\s.+/
 
 // translate-c provide: RegexMatchResult
@@ -85,6 +93,7 @@ typedef struct {
     size_t error_message_len;
 
     uint32_t regex_options;
+    uint32_t regex_extra_options;
     uint32_t match_options;
 
     uint8_t with_match_result;
@@ -104,6 +113,7 @@ typedef struct {
 
     void* re;
     void* match_data;
+    void* compile_context;
 } RegexContext;
 
 // translate-c provide: get_last_error_message
