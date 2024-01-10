@@ -1,1 +1,8 @@
-./scripts/zig.sh run --mod jstring:jstring:./src/jstring.zig --deps jstring tools/benchmark/main.zig -- $@
+FOLDER="benchmark"
+ZIG="../../scripts/zig.sh"
+ENTRY="benchmark"
+
+cd tools/${FOLDER}
+${ZIG} build
+cd - > /dev/null
+tools/${FOLDER}/zig-out/bin/${ENTRY} $@
