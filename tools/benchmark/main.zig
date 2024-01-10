@@ -52,8 +52,8 @@ pub fn main() !void {
     var test_result_map = TestResultMap.init(gaa);
     _ = &test_result_map;
 
-    try runTest("zig test 1", zigTest1, gaa, &test_result_map);
-    try runTest("cpp test 1", cppTest1, gaa, &test_result_map);
+    try runTest("zig create/release", testCreateReleaseZig, gaa, &test_result_map);
+    try runTest("cpp create/release", testCreateReleaseCpp, gaa, &test_result_map);
 
     try printTestResults(test_result_map);
 }
@@ -125,21 +125,43 @@ fn runTest(comptime name: []const u8, comptime test_func: TestFunc, allocator: s
 
 // all tests below
 
-fn zigTest1() anyerror!void {
+const create_release_data = [_][]const u8{
+    "This was a triumph.",
+    "I'm making a note here:",
+    "huge success.",
+    "It's hard to overstate",
+    "My satisfaction.",
+    "Aperture Science.",
+    "We do what we must",
+    "Because we can.",
+    "For the good of all of us.",
+    "Except the ones who are dead.",
+    "But there's no sense crying Over every mistake. You just keep on trying Till you run out of cake. And the Science gets done. And you make a neat gun. For the people who are Still alive.",
+    "I'm not even angry.",
+    "I'm being so sincere right now.",
+    "Even though you broke my heart.",
+    "And killed me.",
+    "And tore me to pieces. And threw every piece into a fire. As they burned it hurt because I was so happy for you! Now these points of data Make a beautiful line. And we're out of beta. We're releasing on time. So I'm GLaD. I got burned. Think of all the things we learned For the people who are Still alive. Go ahead and leave me. I think I prefer to stay inside. Maybe you'll find someone else To help you. Maybe Black Mesa... THAT WAS A JOKE, HA HA, FAT CHANCE. Anyway this cake is great It's so delicious and moist Look at me still talking when there's science to do When I look out there It makes me GLaD I'm not you. I've experiments to run There is research to be done On the people who are Still alive. And believe me I am still alive I'm doing science and I'm still alive I feel FANTASTIC and I'm still alive While you're dying I'll be still alive And when you're dead I will be still alive Still alive Still alive.",
+};
+
+fn testCreateReleaseZig() anyerror!void {
     var arena = jstring.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
+    var rng_src = std.rand.DefaultPrng.init(0);
+    var random = rng_src.random();
     for (0..1_000_000) |_| {
-        //var s = try JString.newFromSlice(std.heap.c_allocator, "hello");
-        var s = try JString.newFromSlice(arena.allocator(), "hello");
-        _ = &s;
-        //s.deinit();
+        const r = random.intRangeAtMost(usize, 0, create_release_data.len - 1);
+        var s = try JString.newFromSlice(arena.allocator(), create_release_data[r]);
+        s.deinit();
     }
 }
 
-fn cppTest1() anyerror!void {
-    const hello_str: []const u8 = "hello";
+fn testCreateReleaseCpp() anyerror!void {
+    var rng_src = std.rand.DefaultPrng.init(0);
+    var random = rng_src.random();
     for (0..1_000_000) |_| {
-        const s_ptr = cpp.new_string(hello_str.ptr, hello_str.len);
+        const r = random.intRangeAtMost(usize, 0, create_release_data.len - 1);
+        const s_ptr = cpp.new_string(create_release_data[r].ptr, create_release_data[r].len);
         cpp.free_string(s_ptr);
     }
 }
