@@ -1,5 +1,23 @@
 const std = @import("std");
 
+pub fn linkPCRE(
+    exe_compile: *std.Build.Step.Compile,
+    jstring_dep: *std.Build.Dependency,
+) void {
+    exe_compile.addCSourceFile(.{
+        .file = .{
+            .path = jstring_dep.builder.pathFromRoot(
+                jstring_dep.module("pcre_binding.c").source_file.path,
+            ),
+        },
+        .flags = &.{"-std=c17"},
+    });
+    exe_compile.linkSystemLibrary2(
+        "libpcre2-8",
+        .{ .use_pkg_config = .yes },
+    );
+}
+
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -14,6 +32,10 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    _ = b.addModule("jstring", .{ .source_file = .{ .path = "src/jstring.zig" } });
+
+    _ = b.addModule("pcre_binding.c", .{ .source_file = .{ .path = b.pathFromRoot("src/pcre/pcre_binding.c") } });
 
     const obj_pcre_binding = b.addObject(.{
         .name = "pcre_binding",
