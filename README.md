@@ -104,7 +104,19 @@ check current benchmark method [here](https://github.com/liyu1981/jstring.zig/bl
 
 # docs
 
-check the auto generated zig docs [here](https://liyu1981.github.io/jstring.zig/docs/index.html)
+check the auto generated zig docs [here](https://liyu1981.github.io/jstring.zig)
+
+# tests
+
+`jstring` is rigorously tested.
+
+```bash
+./script/pcre_test.sh src/jstring.zig
+```
+
+to run all tests.
+
+or check kcov report [here](https://liyu1981.github.io/jstring.zig/cov/index.html): the current level is 100%.
 
 # license
 
