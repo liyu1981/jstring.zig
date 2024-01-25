@@ -100,6 +100,8 @@ benchmark % ./zig-out/bin/benchmark
 
 (`jstring.zig` is built with `-Doptimize=ReleaseFast`, and `cpp` is built with `-std=c++20 -O2`)
 
+check current benchmark method [here](https://github.com/liyu1981/jstring.zig/blob/main/tools/benchmark/main.zig)
+
 # docs
 
 check the auto generated zig docs [here](https://liyu1981.github.io/jstring.zig/docs/index.html)
