@@ -16,11 +16,6 @@
 const enable_arena_allocator: bool = true;
 const enable_pcre: bool = true;
 
-// TODOs:
-//   * arena allocator
-//   * benchmark
-//   * README + doc
-
 const std = @import("std");
 const testing = std.testing;
 

@@ -1,0 +1,17 @@
+.{
+    .name = "example",
+    .version = "0.0.0",
+
+    //.minimum_zig_version = "0.11.0",
+
+    .dependencies = .{
+        .jstring = .{
+            .url = "../",
+            .hash = "1220d2bdde39edb65e7d88f4605b7f576024ac767871b74daa1dc7bc3b111b5e7a79",
+        },
+    },
+
+    .paths = .{
+        "",
+    },
+}
