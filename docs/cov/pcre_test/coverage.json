@@ -1,0 +1,13 @@
+{
+  "files": [
+    {"file": "/Users/bytedance/DevCamp/jstring/src/pcre/pcre_binding.c", "percent_covered": "100.00", "covered_lines": "175", "total_lines": "175"},
+    {"file": "/Users/bytedance/DevCamp/jstring/src/jstring.zig", "percent_covered": "100.00", "covered_lines": "1951", "total_lines": "1951"}
+  ],
+  "percent_covered": "100.00",
+  "covered_lines": 2126,
+  "total_lines": 2126,
+  "percent_low": 25,
+  "percent_high": 75,
+  "command": "pcre_test",
+  "date": "2024-02-02 22:09:19"
+}
