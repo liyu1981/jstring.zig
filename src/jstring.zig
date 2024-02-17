@@ -49,63 +49,63 @@ pub const JString = struct {
         this.unmanaged.deinit(this.allocator);
     }
 
-    pub inline fn newEmpty(allocator: std.mem.Allocator) anyerror!JString {
+    pub inline fn newEmpty(allocator: std.mem.Allocator) !JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newEmpty(allocator),
         };
     }
 
-    pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) anyerror!JString {
+    pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) !JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromSlice(allocator, string_slice),
         };
     }
 
-    pub fn newFromJString(that: JString) anyerror!JString {
+    pub fn newFromJString(that: JString) !JString {
         return JString{
             .allocator = that.allocator,
             .unmanaged = try JStringUnmanaged.newFromJStringUnmanaged(that.allocator, that.unmanaged),
         };
     }
 
-    pub fn newFromFormat(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) anyerror!JString {
+    pub fn newFromFormat(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromFormat(allocator, fmt, args),
         };
     }
 
-    pub fn newFromTuple(allocator: std.mem.Allocator, rest_items: anytype) anyerror!JString {
+    pub fn newFromTuple(allocator: std.mem.Allocator, rest_items: anytype) !JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromTuple(allocator, rest_items),
         };
     }
 
-    pub inline fn newFromNumber(allocator: std.mem.Allocator, comptime T: type, value: T) anyerror!JString {
+    pub inline fn newFromNumber(allocator: std.mem.Allocator, comptime T: type, value: T) !JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromNumber(allocator, T, value),
         };
     }
 
-    pub inline fn newFromStringify(allocator: std.mem.Allocator, value: anytype) anyerror!JString {
+    pub inline fn newFromStringify(allocator: std.mem.Allocator, value: anytype) !JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromStringify(allocator, value),
         };
     }
 
-    pub inline fn newFromStringifyWithOptions(allocator: std.mem.Allocator, value: anytype, options: std.json.StringifyOptions) anyerror!JString {
+    pub inline fn newFromStringifyWithOptions(allocator: std.mem.Allocator, value: anytype, options: std.json.StringifyOptions) !JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromStringifyWithOptions(allocator, value, options),
         };
     }
 
-    pub inline fn newFromFile(allocator: std.mem.Allocator, f: std.fs.File) anyerror!JString {
+    pub inline fn newFromFile(allocator: std.mem.Allocator, f: std.fs.File) !JString {
         return JString{
             .allocator = allocator,
             .unmanaged = try JStringUnmanaged.newFromFile(allocator, f),
@@ -129,11 +129,11 @@ pub const JString = struct {
         return this.unmanaged.len();
     }
 
-    pub inline fn utf8Len(this: *JString) anyerror!usize {
+    pub inline fn utf8Len(this: *JString) !usize {
         return this.unmanaged.utf8Len();
     }
 
-    pub inline fn clone(this: *const JString) anyerror!JString {
+    pub inline fn clone(this: *const JString) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.clone(this.allocator),
@@ -152,7 +152,7 @@ pub const JString = struct {
         return this.eqlSlice(that.unmanaged.str_slice);
     }
 
-    pub inline fn explode(this: *const JString, limit: isize) anyerror![]JString {
+    pub inline fn explode(this: *const JString, limit: isize) ![]JString {
         const unmanaged_strings = try this.unmanaged.explode(this.allocator, limit);
         const strings = try this.allocator.alloc(JString, unmanaged_strings.len);
         for (0..unmanaged_strings.len) |i| {
@@ -174,25 +174,25 @@ pub const JString = struct {
         return this.unmanaged.reverseIterator();
     }
 
-    pub inline fn utf8Iterator(this: *JString) anyerror!std.unicode.Utf8Iterator {
+    pub inline fn utf8Iterator(this: *JString) !std.unicode.Utf8Iterator {
         return this.unmanaged.utf8Iterator();
     }
 
     // ** at
 
-    pub inline fn at(this: *JString, index: isize) anyerror!u21 {
+    pub inline fn at(this: *JString, index: isize) !u21 {
         return this.unmanaged.at(index);
     }
 
     // ** charAt
 
-    pub inline fn charAt(this: *const JString, index: isize) anyerror!u8 {
+    pub inline fn charAt(this: *const JString, index: isize) !u8 {
         return this.unmanaged.charAt(index);
     }
 
     // ** charCodeAt
 
-    pub inline fn charCodeAt(this: *const JString, index: isize) anyerror!u21 {
+    pub inline fn charCodeAt(this: *const JString, index: isize) !u21 {
         _ = this;
         _ = index;
         @compileError("charCodeAt does not make sense in zig, please use at or charAt!");
@@ -200,7 +200,7 @@ pub const JString = struct {
 
     // ** codePointAt
 
-    pub inline fn codePointAt(this: *const JString, index: isize) anyerror!u21 {
+    pub inline fn codePointAt(this: *const JString, index: isize) !u21 {
         _ = this;
         _ = index;
         @compileError("codePointAt does not make sense in zig, please use at or charAt!");
@@ -208,14 +208,14 @@ pub const JString = struct {
 
     // ** concat
 
-    pub inline fn concat(this: *const JString, other_jstring: JString) anyerror!JString {
+    pub inline fn concat(this: *const JString, other_jstring: JString) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.concat(this.allocator, other_jstring.unmanaged),
         };
     }
 
-    pub inline fn concatSlice(this: *const JString, other_slice: []const u8) anyerror!JString {
+    pub inline fn concatSlice(this: *const JString, other_slice: []const u8) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.concatSlice(this.allocator, other_slice),
@@ -225,7 +225,7 @@ pub const JString = struct {
     /// as we can not know len of rest_jstrings in comptime, so this method is a bit of slower than unmanaged version
     /// (or concatManySlices). Preciesly, slower than one allocation/deallocation of
     /// `[rest_jstrings.len]const []const u8` time.
-    pub fn concatMany(this: *const JString, rest_jstrings: []const JString) anyerror!JString {
+    pub fn concatMany(this: *const JString, rest_jstrings: []const JString) !JString {
         if (rest_jstrings.len == 0) {
             return this.clone();
         } else {
@@ -239,14 +239,14 @@ pub const JString = struct {
         }
     }
 
-    pub inline fn concatManySlices(this: *const JString, rest_slices: []const []const u8) anyerror!JString {
+    pub inline fn concatManySlices(this: *const JString, rest_slices: []const []const u8) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.concatManySlices(this.allocator, rest_slices),
         };
     }
 
-    pub inline fn concatFormat(this: *const JString, comptime fmt: []const u8, rest_items: anytype) anyerror!JString {
+    pub inline fn concatFormat(this: *const JString, comptime fmt: []const u8, rest_items: anytype) !JString {
         const ArgsType = @TypeOf(rest_items);
         const args_type_info = @typeInfo(ArgsType);
         if (args_type_info != .Struct) {
@@ -268,7 +268,7 @@ pub const JString = struct {
         }
     }
 
-    pub inline fn concatTuple(this: *const JString, rest_items: anytype) anyerror!JString {
+    pub inline fn concatTuple(this: *const JString, rest_items: anytype) !JString {
         const ArgsType = @TypeOf(rest_items);
         const args_type_info = @typeInfo(ArgsType);
         if (args_type_info != .Struct) {
@@ -334,7 +334,7 @@ pub const JString = struct {
         return this.unmanaged.indexOf(needle_slice, pos);
     }
 
-    pub inline fn fastIndexOf(this: *const JString, needle_slice: []const u8, pos: usize) anyerror!isize {
+    pub inline fn fastIndexOf(this: *const JString, needle_slice: []const u8, pos: usize) !isize {
         return this.unmanaged.fastIndexOf(this.allocator, needle_slice, pos);
     }
 
@@ -350,7 +350,7 @@ pub const JString = struct {
         return this.unmanaged.lastIndexOf(needle_slice, pos);
     }
 
-    pub inline fn fastLastIndexOf(this: *const JString, needle_slice: []const u8, pos: usize) anyerror!isize {
+    pub inline fn fastLastIndexOf(this: *const JString, needle_slice: []const u8, pos: usize) !isize {
         return this.unmanaged.fastLastIndexOf(this.allocator, needle_slice, pos);
     }
 
@@ -363,7 +363,7 @@ pub const JString = struct {
 
     // ** match
 
-    pub inline fn match(this: *const JString, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) anyerror!Regex {
+    pub inline fn match(this: *const JString, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) !Regex {
         if (enable_pcre) {
             return Regex{
                 .allocator = this.allocator,
@@ -376,7 +376,7 @@ pub const JString = struct {
 
     // ** matchAll
 
-    pub inline fn matchAll(this: *const JString, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) anyerror!Regex {
+    pub inline fn matchAll(this: *const JString, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) !Regex {
         if (enable_pcre) {
             return Regex{
                 .allocator = this.allocator,
@@ -396,7 +396,7 @@ pub const JString = struct {
 
     // ** padEnd
 
-    pub inline fn padEnd(this: *const JString, wanted_len: usize, pad_slice: []const u8) anyerror!JString {
+    pub inline fn padEnd(this: *const JString, wanted_len: usize, pad_slice: []const u8) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.padEnd(this.allocator, wanted_len, pad_slice),
@@ -404,20 +404,20 @@ pub const JString = struct {
     }
 
     /// JString version of padEnd, accept pad_string (*const JStringUnmanaged) instead of slice.
-    pub inline fn padEndJString(this: *const JString, wanted_len: usize, pad_string: *const JString) anyerror!JString {
+    pub inline fn padEndJString(this: *const JString, wanted_len: usize, pad_string: *const JString) !JString {
         return this.padEnd(wanted_len, pad_string.unmanaged.str_slice);
     }
 
     // ** padStart
 
-    pub inline fn padStart(this: *const JString, wanted_len: usize, pad_slice: []const u8) anyerror!JString {
+    pub inline fn padStart(this: *const JString, wanted_len: usize, pad_slice: []const u8) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.padStart(this.allocator, wanted_len, pad_slice),
         };
     }
 
-    pub inline fn padStartJString(this: *const JString, wanted_len: usize, pad_string: *const JString) anyerror!JString {
+    pub inline fn padStartJString(this: *const JString, wanted_len: usize, pad_string: *const JString) !JString {
         return this.padStart(wanted_len, pad_string.unmanaged.str_slice);
     }
 
@@ -429,7 +429,7 @@ pub const JString = struct {
 
     // ** repeat
 
-    pub inline fn repeat(this: *const JString, count: usize) anyerror!JString {
+    pub inline fn repeat(this: *const JString, count: usize) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.repeat(this.allocator, count),
@@ -438,14 +438,14 @@ pub const JString = struct {
 
     // ** replace
 
-    pub inline fn replace(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
+    pub inline fn replace(this: *const JString, pattern: []const u8, replacement_slice: []const u8) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.replace(this.allocator, pattern, replacement_slice),
         };
     }
 
-    pub inline fn replaceByRegex(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
+    pub inline fn replaceByRegex(this: *const JString, pattern: []const u8, replacement_slice: []const u8) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.replaceByRegex(this.allocator, pattern, replacement_slice),
@@ -454,14 +454,14 @@ pub const JString = struct {
 
     // ** replaceAll
 
-    pub inline fn replaceAll(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
+    pub inline fn replaceAll(this: *const JString, pattern: []const u8, replacement_slice: []const u8) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.replaceAll(this.allocator, pattern, replacement_slice),
         };
     }
 
-    pub inline fn replaceAllByRegex(this: *const JString, pattern: []const u8, replacement_slice: []const u8) anyerror!JString {
+    pub inline fn replaceAllByRegex(this: *const JString, pattern: []const u8, replacement_slice: []const u8) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.replaceAllByRegex(this.allocator, pattern, replacement_slice),
@@ -474,7 +474,7 @@ pub const JString = struct {
         return this.unmanaged.search(pattern, offset);
     }
 
-    pub inline fn searchByRegex(this: *const JString, pattern: []const u8, offset: usize) anyerror!isize {
+    pub inline fn searchByRegex(this: *const JString, pattern: []const u8, offset: usize) !isize {
         if (enable_pcre) {
             return this.unmanaged.searchByRegex(this.allocator, pattern, offset);
         } else {
@@ -484,20 +484,20 @@ pub const JString = struct {
 
     // ** slice
 
-    pub inline fn slice(this: *const JString, index_start: isize, index_end: isize) anyerror!JString {
+    pub inline fn slice(this: *const JString, index_start: isize, index_end: isize) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.slice(this.allocator, index_start, index_end),
         };
     }
 
-    pub inline fn sliceWithStartOnly(this: *const JString, index_start: isize) anyerror!JString {
+    pub inline fn sliceWithStartOnly(this: *const JString, index_start: isize) !JString {
         return this.slice(index_start, @as(isize, @intCast(this.len())));
     }
 
     // ** split
 
-    pub inline fn split(this: *JString, seperator: []const u8, limit: isize) anyerror![]JString {
+    pub inline fn split(this: *JString, seperator: []const u8, limit: isize) ![]JString {
         const unmanaged_strings = try this.unmanaged.split(this.allocator, seperator, limit);
         const strings = try this.allocator.alloc(JString, unmanaged_strings.len);
         for (0..unmanaged_strings.len) |i| strings[i] = JString{
@@ -507,11 +507,11 @@ pub const JString = struct {
         return strings;
     }
 
-    pub inline fn splitByWhiteSpace(this: *JString, limit: isize) anyerror![]JString {
+    pub inline fn splitByWhiteSpace(this: *JString, limit: isize) ![]JString {
         return this.explode(limit);
     }
 
-    pub inline fn splitByRegex(this: *JString, pattern: []const u8, offset: usize, limit: isize) anyerror![]JString {
+    pub inline fn splitByRegex(this: *JString, pattern: []const u8, offset: usize, limit: isize) ![]JString {
         if (enable_pcre) {
             const unmanaged_strings = try this.unmanaged.splitByRegex(this.allocator, pattern, offset, limit);
             const strings = try this.allocator.alloc(JString, unmanaged_strings.len);
@@ -537,21 +537,21 @@ pub const JString = struct {
 
     // ** toLocaleLowerCase
 
-    pub fn toLocaleLowerCase(this: *const JString) anyerror!JString {
+    pub fn toLocaleLowerCase(this: *const JString) !JString {
         _ = this;
         @compileError("TODO, not yet implemented!");
     }
 
     // ** toLocaleUpperCase
 
-    pub fn toLocalUpperCase(this: *const JString) anyerror!JString {
+    pub fn toLocalUpperCase(this: *const JString) !JString {
         _ = this;
         @compileError("TODO, not yet implemented!");
     }
 
     // ** toLowerCase
 
-    pub fn toLowerCase(this: *const JString) anyerror!JString {
+    pub fn toLowerCase(this: *const JString) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.toLowerCase(this.allocator),
@@ -560,7 +560,7 @@ pub const JString = struct {
 
     // ** toUpperCase
 
-    pub fn toUpperCase(this: *const JString) anyerror!JString {
+    pub fn toUpperCase(this: *const JString) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.toUpperCase(this.allocator),
@@ -576,7 +576,7 @@ pub const JString = struct {
 
     // ** trim
 
-    pub fn trim(this: *const JString) anyerror!JString {
+    pub fn trim(this: *const JString) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.trim(this.allocator),
@@ -585,7 +585,7 @@ pub const JString = struct {
 
     // ** trimEnd
 
-    pub fn trimEnd(this: *const JString) anyerror!JString {
+    pub fn trimEnd(this: *const JString) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.trimEnd(this.allocator),
@@ -594,7 +594,7 @@ pub const JString = struct {
 
     // ** trimStart
 
-    pub fn trimStart(this: *const JString) anyerror!JString {
+    pub fn trimStart(this: *const JString) !JString {
         return JString{
             .allocator = this.allocator,
             .unmanaged = try this.unmanaged.trimStart(this.allocator),
@@ -613,6 +613,30 @@ pub const JString = struct {
 pub const RegexUnmanaged = defineRegexUnmanaged(enable_pcre);
 
 pub const JStringUnmanaged = struct {
+    pub const Error = error{
+        OutOfMemory,
+        AccessDenied,
+        Unexpected,
+        SystemResources,
+        IsDir,
+        WouldBlock,
+        InputOutput,
+        BrokenPipe,
+        OperationAborted,
+        ConnectionResetByPeer,
+        ConnectionTimedOut,
+        NotOpenForReading,
+        SocketNotConnected,
+        NetNameDeleted,
+        InvalidUtf8,
+        IndexOutOfBounds,
+        RegexBadPattern,
+        RegexFetchBeforeMatch,
+        RegexMatchFailed,
+        RegexMatchOverlapped,
+        Utf8InvalidStartByte,
+    };
+
     pub const U8Iterator = struct {
         const Self = @This();
 
@@ -659,7 +683,7 @@ pub const JStringUnmanaged = struct {
     // constructors
 
     /// As the name assumes, it returns an empty string.
-    pub fn newEmpty(allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub fn newEmpty(allocator: std.mem.Allocator) Error!JStringUnmanaged {
         const new_slice = try allocator.alloc(u8, 0);
         return JStringUnmanaged{
             .str_slice = new_slice,
@@ -668,7 +692,7 @@ pub const JStringUnmanaged = struct {
 
     /// Returns a string copied the content of slice. i.e.,
     /// `const s = try JStringUnmanaged.newFromSlice(allocator, "hello,world");`
-    pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) anyerror!JStringUnmanaged {
+    pub fn newFromSlice(allocator: std.mem.Allocator, string_slice: []const u8) Error!JStringUnmanaged {
         const new_slice = try allocator.alloc(u8, string_slice.len);
         @memcpy(new_slice, string_slice);
         return JStringUnmanaged{
@@ -677,7 +701,7 @@ pub const JStringUnmanaged = struct {
     }
 
     /// Returns a string copied the content of the other JStringUnmanaged
-    pub fn newFromJStringUnmanaged(allocator: std.mem.Allocator, that: JStringUnmanaged) anyerror!JStringUnmanaged {
+    pub fn newFromJStringUnmanaged(allocator: std.mem.Allocator, that: JStringUnmanaged) Error!JStringUnmanaged {
         const new_slice = try allocator.alloc(u8, that.len());
         @memcpy(new_slice, that.str_slice);
         return JStringUnmanaged{
@@ -687,7 +711,7 @@ pub const JStringUnmanaged = struct {
 
     /// Returns a string from the result of formatting, i.e., sprintf.
     /// Example: `var s = JStringUnmanaged.newFromFormat(allocator, "{s}{d}", .{ "hello", 5 })`
-    pub fn newFromFormat(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) anyerror!JStringUnmanaged {
+    pub fn newFromFormat(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) Error!JStringUnmanaged {
         const new_slice = try std.fmt.allocPrint(allocator, fmt, args);
         return JStringUnmanaged{
             .str_slice = new_slice,
@@ -697,7 +721,7 @@ pub const JStringUnmanaged = struct {
     /// Returns a string from auto formatting a tuple of items. Essentially what it does is to guess the fmt
     /// automatically. The max items of the tuple is 32.
     /// Example: `var s = JStringUnmanaged.newFromFormat(allocator, .{ "hello", 5 })`
-    pub fn newFromTuple(allocator: std.mem.Allocator, rest_items: anytype) anyerror!JStringUnmanaged {
+    pub fn newFromTuple(allocator: std.mem.Allocator, rest_items: anytype) Error!JStringUnmanaged {
         const ArgsType = @TypeOf(rest_items);
         const args_type_info = @typeInfo(ArgsType);
         if (args_type_info != .Struct) {
@@ -722,7 +746,7 @@ pub const JStringUnmanaged = struct {
         return JStringUnmanaged.newFromFormat(allocator, fmt_buf[0..fmt_len], rest_items);
     }
 
-    pub inline fn newFromNumber(allocator: std.mem.Allocator, comptime T: type, value: T) anyerror!JStringUnmanaged {
+    pub inline fn newFromNumber(allocator: std.mem.Allocator, comptime T: type, value: T) Error!JStringUnmanaged {
         switch (@typeInfo(T)) {
             .Int => {},
             .Float => {},
@@ -731,21 +755,21 @@ pub const JStringUnmanaged = struct {
         return JStringUnmanaged.newFromFormat(allocator, "{d}", .{value});
     }
 
-    pub fn newFromStringify(allocator: std.mem.Allocator, value: anytype) anyerror!JStringUnmanaged {
+    pub fn newFromStringify(allocator: std.mem.Allocator, value: anytype) Error!JStringUnmanaged {
         const new_slice = try std.json.stringifyAlloc(allocator, value, .{});
         return JStringUnmanaged{
             .str_slice = new_slice,
         };
     }
 
-    pub fn newFromStringifyWithOptions(allocator: std.mem.Allocator, value: anytype, options: std.json.StringifyOptions) anyerror!JStringUnmanaged {
+    pub fn newFromStringifyWithOptions(allocator: std.mem.Allocator, value: anytype, options: std.json.StringifyOptions) Error!JStringUnmanaged {
         const new_slice = try std.json.stringifyAlloc(allocator, value, options);
         return JStringUnmanaged{
             .str_slice = new_slice,
         };
     }
 
-    pub fn newFromFile(allocator: std.mem.Allocator, f: std.fs.File) anyerror!JStringUnmanaged {
+    pub fn newFromFile(allocator: std.mem.Allocator, f: std.fs.File) Error!JStringUnmanaged {
         const stat = try f.stat();
         var new_slice = try allocator.alloc(u8, stat.size);
         const read_size = try f.readAll(new_slice);
@@ -784,7 +808,7 @@ pub const JStringUnmanaged = struct {
 
     /// First time call utf8Len will init the utf8_view and calculate len once. After that we will just use the cached
     /// view and len.
-    pub fn utf8Len(this: *JStringUnmanaged) anyerror!usize {
+    pub fn utf8Len(this: *JStringUnmanaged) Error!usize {
         if (!this.utf8_view_inited) {
             this.utf8_view = try std.unicode.Utf8View.init(this.str_slice);
             this.utf8_view_inited = true;
@@ -801,11 +825,11 @@ pub const JStringUnmanaged = struct {
     }
 
     /// As the name assumes. Equals to `JStringUnmanaged.newFromJStringUnmanaged(allocator, this)`
-    pub inline fn clone(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub inline fn clone(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error!JStringUnmanaged {
         return JStringUnmanaged.newFromJStringUnmanaged(allocator, this.*);
     }
 
-    fn _cloneAsArray(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror![]JStringUnmanaged {
+    fn _cloneAsArray(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error![]JStringUnmanaged {
         var result_jstrings = try allocator.alloc(JStringUnmanaged, 1);
         result_jstrings[0] = try this.clone(allocator);
         return result_jstrings;
@@ -829,7 +853,7 @@ pub const JStringUnmanaged = struct {
     /// explode this string to small strings sperated by ascii spaces while respects utf8 chars. Limit can be -1 or
     /// positive numbers. When limit is negative means auto calculate how many strings can return; otherwise will return
     /// min(limit, possible max number of strings)
-    pub fn explode(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
+    pub fn explode(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) Error![]JStringUnmanaged {
         const real_limit = brk: {
             if (limit < 0) {
                 break :brk this.str_slice.len;
@@ -840,7 +864,7 @@ pub const JStringUnmanaged = struct {
         return this._explode(allocator, real_limit);
     }
 
-    fn _explode(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: usize) anyerror![]JStringUnmanaged {
+    fn _explode(this: *const JStringUnmanaged, allocator: std.mem.Allocator, limit: usize) Error![]JStringUnmanaged {
         var result_jstrings = try allocator.alloc(JStringUnmanaged, limit);
         var result_count: usize = 0;
         var pos: usize = 0;
@@ -907,7 +931,7 @@ pub const JStringUnmanaged = struct {
 
     /// return std.unicode.Utf8Iterator, which can help to iterate through every
     /// unicode char
-    pub inline fn utf8Iterator(this: *JStringUnmanaged) anyerror!std.unicode.Utf8Iterator {
+    pub inline fn utf8Iterator(this: *JStringUnmanaged) Error!std.unicode.Utf8Iterator {
         _ = try this.utf8Len();
         return this.utf8_view.iterator();
     }
@@ -917,7 +941,7 @@ pub const JStringUnmanaged = struct {
     /// different to Javascript's string.at, return unicode char(u21) of index, as prefer utf-8 string. Same to
     /// Javascript, accept index as `i32`: when postive is from beginning; when negative is from ending; when
     /// `index == 0`, return the the first char if not empty.
-    pub fn at(this: *JStringUnmanaged, index: isize) anyerror!u21 {
+    pub fn at(this: *JStringUnmanaged, index: isize) Error!u21 {
         const utf8_len = try this.utf8Len();
         if (index >= utf8_len) {
             return error.IndexOutOfBounds;
@@ -947,7 +971,7 @@ pub const JStringUnmanaged = struct {
     /// different to Javascript's string.charAt, return u8 of index, as prefer utf-8 string. Same to Javascript,
     /// accept index as `i32`: when postive is from beginning; when negative is from ending; when `index == 0`, return
     /// the the first char if not empty.
-    pub fn charAt(this: *const JStringUnmanaged, index: isize) anyerror!u8 {
+    pub fn charAt(this: *const JStringUnmanaged, index: isize) Error!u8 {
         if (index >= this.len()) {
             return error.IndexOutOfBounds;
         }
@@ -966,7 +990,7 @@ pub const JStringUnmanaged = struct {
     // ** charCodeAt
 
     /// charCodeAt does not make sense in zig, please use at or charAt!
-    pub inline fn charCodeAt(this: *const JStringUnmanaged, index: isize) anyerror!u21 {
+    pub inline fn charCodeAt(this: *const JStringUnmanaged, index: isize) Error!u21 {
         _ = this;
         _ = index;
         @compileError("charCodeAt does not make sense in zig, please use at or charAt!");
@@ -975,7 +999,7 @@ pub const JStringUnmanaged = struct {
     // ** codePointAt
 
     /// as in zig we use u21 for char, so codePointAt is a trival alias to at().
-    pub inline fn codePointAt(this: *const JStringUnmanaged, index: isize) anyerror!u21 {
+    pub inline fn codePointAt(this: *const JStringUnmanaged, index: isize) Error!u21 {
         _ = this;
         _ = index;
         @compileError("codePointAt does not make sense in zig, please use at or charAt!");
@@ -984,11 +1008,11 @@ pub const JStringUnmanaged = struct {
     // ** concat
 
     /// Concat jstrings with the other.
-    pub fn concat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, other_jstring: JStringUnmanaged) anyerror!JStringUnmanaged {
+    pub fn concat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, other_jstring: JStringUnmanaged) Error!JStringUnmanaged {
         return this.concatSlice(allocator, other_jstring.str_slice);
     }
 
-    pub fn concatSlice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, other_slice: []const u8) anyerror!JStringUnmanaged {
+    pub fn concatSlice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, other_slice: []const u8) Error!JStringUnmanaged {
         if (other_slice.len == 0) {
             return this.clone(allocator);
         } else {
@@ -1007,7 +1031,7 @@ pub const JStringUnmanaged = struct {
 
     /// Concat jstrings in rest_jstrings in order, return a new allocated jstring. If `rest_jstrings.len == 0`, will
     /// return a copy of this jstring.
-    pub fn concatMany(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_jstrings: []const JStringUnmanaged) anyerror!JStringUnmanaged {
+    pub fn concatMany(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_jstrings: []const JStringUnmanaged) Error!JStringUnmanaged {
         if (rest_jstrings.len == 0) {
             return this.clone(allocator);
         } else {
@@ -1033,7 +1057,7 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    pub fn concatManySlices(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_slices: []const []const u8) anyerror!JStringUnmanaged {
+    pub fn concatManySlices(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_slices: []const []const u8) Error!JStringUnmanaged {
         if (rest_slices.len == 0) {
             return this.clone(allocator);
         } else {
@@ -1068,7 +1092,7 @@ pub const JStringUnmanaged = struct {
     /// const tmp_jstrings = []JStringUnmanaged{ tmp_jstring };
     /// this.concat(allocator, &tmp_jstrings);
     /// ```
-    pub fn concatFormat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, comptime fmt: []const u8, rest_items: anytype) anyerror!JStringUnmanaged {
+    pub fn concatFormat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, comptime fmt: []const u8, rest_items: anytype) Error!JStringUnmanaged {
         const ArgsType = @TypeOf(rest_items);
         const args_type_info = @typeInfo(ArgsType);
         if (args_type_info != .Struct) {
@@ -1091,7 +1115,7 @@ pub const JStringUnmanaged = struct {
     }
 
     /// Similar to concatFormat, but try to auto gen fmt from rest_items.
-    pub fn concatTuple(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_items: anytype) anyerror!JStringUnmanaged {
+    pub fn concatTuple(this: *const JStringUnmanaged, allocator: std.mem.Allocator, rest_items: anytype) Error!JStringUnmanaged {
         const ArgsType = @TypeOf(rest_items);
         const args_type_info = @typeInfo(ArgsType);
         if (args_type_info != .Struct) {
@@ -1166,7 +1190,7 @@ pub const JStringUnmanaged = struct {
 
     /// Fast version of indexOf as it uses KMP algorithm for searching. Will result in O(this.len+needle_slice.len) but
     /// also requires allocator for creating KMP lookup table.
-    pub inline fn fastIndexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize) anyerror!isize {
+    pub inline fn fastIndexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize) Error!isize {
         return this._kmp_indexOf(allocator, needle_slice, pos, false);
     }
 
@@ -1197,7 +1221,7 @@ pub const JStringUnmanaged = struct {
         return if (occurence >= 0) @as(isize, @intCast(pos)) + occurence else occurence;
     }
 
-    fn _kmp_indexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize, want_last: bool) anyerror!isize {
+    fn _kmp_indexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize, want_last: bool) Error!isize {
         if (needle_slice.len == 0) {
             if (want_last) {
                 return @as(isize, @intCast(this.len() - 1));
@@ -1263,7 +1287,7 @@ pub const JStringUnmanaged = struct {
         return this._naive_indexOf(needle_slice, pos, true);
     }
 
-    pub inline fn fastLastIndexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize) anyerror!isize {
+    pub inline fn fastLastIndexOf(this: *const JStringUnmanaged, allocator: std.mem.Allocator, needle_slice: []const u8, pos: usize) Error!isize {
         return this._kmp_indexOf(allocator, needle_slice, pos, true);
     }
 
@@ -1279,7 +1303,7 @@ pub const JStringUnmanaged = struct {
 
     /// Thin wrap of Regex's match against this.str_slice as search subject. The regex syntax used is pcre2, can read
     /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here: https://regex101.com/
-    pub inline fn match(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
+    pub inline fn match(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, fetch_results: bool, regex_options: u32, match_options: u32) Error!RegexUnmanaged {
         if (enable_pcre) {
             var re = try RegexUnmanaged.init(allocator, pattern, regex_options);
             try re.match(allocator, this.str_slice, offset, fetch_results, match_options);
@@ -1293,7 +1317,7 @@ pub const JStringUnmanaged = struct {
 
     /// Thin wrap of Regex's matchAll against this.str_slice as search subject. The regex syntax used is pcre2, can read
     /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here: https://regex101.com/
-    pub inline fn matchAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) anyerror!RegexUnmanaged {
+    pub inline fn matchAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, regex_options: u32, match_options: u32) Error!RegexUnmanaged {
         if (enable_pcre) {
             var re = try RegexUnmanaged.init(allocator, pattern, regex_options);
             try re.matchAll(allocator, this.str_slice, offset, match_options);
@@ -1316,7 +1340,7 @@ pub const JStringUnmanaged = struct {
     /// The padEnd method creates a new string by padding this string with a given slice (repeated, if needed) so that
     /// the resulting string reaches a given length. The padding is applied from the end of this string. If padString is
     /// too long to stay within targetLength, it will be truncated from the beginning.
-    pub fn padEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) anyerror!JStringUnmanaged {
+    pub fn padEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) Error!JStringUnmanaged {
         if (this.len() >= wanted_len) {
             return this.clone(allocator);
         }
@@ -1340,7 +1364,7 @@ pub const JStringUnmanaged = struct {
     }
 
     /// JString version of padEnd, accept pad_string (*const JStringUnmanaged) instead of slice.
-    pub inline fn padEndJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) anyerror!JStringUnmanaged {
+    pub inline fn padEndJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) Error!JStringUnmanaged {
         return this.padEnd(allocator, wanted_len, pad_string.str_slice);
     }
 
@@ -1349,7 +1373,7 @@ pub const JStringUnmanaged = struct {
     /// The padStart() method creates a new string by padding this string with another slice (multiple times, if needed)
     /// until the resulting string reaches the given length. The padding is applied from the start of this string. If
     /// pad_slice is too long to stay within the wanted_len, it will be truncated from the end.
-    pub fn padStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) anyerror!JStringUnmanaged {
+    pub fn padStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_slice: []const u8) Error!JStringUnmanaged {
         if (this.len() >= wanted_len) {
             return this.clone(allocator);
         }
@@ -1374,7 +1398,7 @@ pub const JStringUnmanaged = struct {
     }
 
     /// JString version of padStart, accept pad_string (*const JStringUnmanaged) instead of slice.
-    pub inline fn padStartJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) anyerror!JStringUnmanaged {
+    pub inline fn padStartJString(this: *const JStringUnmanaged, allocator: std.mem.Allocator, wanted_len: usize, pad_string: *const JStringUnmanaged) Error!JStringUnmanaged {
         return this.padStart(allocator, wanted_len, pad_string.str_slice);
     }
 
@@ -1388,7 +1412,7 @@ pub const JStringUnmanaged = struct {
     // ** repeat
 
     /// repeat current string for `count` times and return as a new string.
-    pub fn repeat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, count: usize) anyerror!JStringUnmanaged {
+    pub fn repeat(this: *const JStringUnmanaged, allocator: std.mem.Allocator, count: usize) Error!JStringUnmanaged {
         if (count == 0 or this.len() == 0) {
             return JStringUnmanaged.newEmpty(allocator);
         }
@@ -1407,25 +1431,25 @@ pub const JStringUnmanaged = struct {
 
     // ** replace
 
-    pub fn replace(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+    pub fn replace(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) Error!JStringUnmanaged {
         return this._replace(allocator, pattern, replacement_slice, false);
     }
 
-    pub fn replaceByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+    pub fn replaceByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) Error!JStringUnmanaged {
         return this._replaceByRegex(allocator, pattern, replacement_slice, false);
     }
 
     // ** replaceAll
 
-    pub fn replaceAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+    pub fn replaceAll(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) Error!JStringUnmanaged {
         return this._replace(allocator, pattern, replacement_slice, true);
     }
 
-    pub fn replaceAllByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+    pub fn replaceAllByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8) Error!JStringUnmanaged {
         return this._replaceByRegex(allocator, pattern, replacement_slice, true);
     }
 
-    fn _replace(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8, comptime match_all: bool) anyerror!JStringUnmanaged {
+    fn _replace(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8, comptime match_all: bool) Error!JStringUnmanaged {
         const max_gap_count: usize = if (match_all) @divFloor(this.str_slice.len, pattern.len) else 1;
         var gaps = try allocator.alloc(_MatchedGapIterator.Gap, max_gap_count);
         defer allocator.free(gaps);
@@ -1456,7 +1480,7 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    fn _replaceByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8, comptime match_all: bool) anyerror!JStringUnmanaged {
+    fn _replaceByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, replacement_slice: []const u8, comptime match_all: bool) Error!JStringUnmanaged {
         if (enable_pcre) {
             var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions);
             if (match_all) {
@@ -1505,7 +1529,7 @@ pub const JStringUnmanaged = struct {
         }
     }
 
-    fn _joinGapsWithSlice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, gaps: []_MatchedGapIterator.Gap, replacement_slice: []const u8) anyerror!JStringUnmanaged {
+    fn _joinGapsWithSlice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, gaps: []_MatchedGapIterator.Gap, replacement_slice: []const u8) Error!JStringUnmanaged {
         var first_gap_start_from_zero = false;
         var last_gap_end_in_end = false;
         var total_gap_len: usize = 0;
@@ -1557,7 +1581,7 @@ pub const JStringUnmanaged = struct {
     /// This function is searching by regex so it requires allocator. If the pattern is valid, will return first matched
     /// start or -1 (when there is no match). Buf if the pattern itself has problem, will return
     /// `JStringError.RegexMatchFailed`.
-    pub fn searchByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize) anyerror!isize {
+    pub fn searchByRegex(this: *const JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize) Error!isize {
         if (enable_pcre) {
             var re = try RegexUnmanaged.init(allocator, pattern, RegexUnmanaged.DefaultRegexOptions);
             try re.match(allocator, this.str_slice, offset, true, RegexUnmanaged.DefaultMatchOptions);
@@ -1585,7 +1609,7 @@ pub const JStringUnmanaged = struct {
     /// and `index_end` can be positive or negative numbers. When is positive, means the forward location from string
     /// beginning; when is negative, means the backward location from string ending. Example: if `s` contains `"hello"`,
     /// `s.slice(allocator, 1, -1)` will return a new string with content `"ell"`.
-    pub fn slice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: isize, index_end: isize) anyerror!JStringUnmanaged {
+    pub fn slice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: isize, index_end: isize) Error!JStringUnmanaged {
         const uindex_start = brk: {
             if (index_start >= 0) {
                 break :brk @as(usize, @intCast(index_start));
@@ -1609,11 +1633,11 @@ pub const JStringUnmanaged = struct {
         return this._slice(allocator, uindex_start, uindex_end);
     }
 
-    pub inline fn sliceWithStartOnly(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: isize) anyerror!JStringUnmanaged {
+    pub inline fn sliceWithStartOnly(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: isize) Error!JStringUnmanaged {
         return this.slice(allocator, index_start, @as(isize, @intCast(this.len())));
     }
 
-    fn _slice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: usize, index_end: usize) anyerror!JStringUnmanaged {
+    fn _slice(this: *const JStringUnmanaged, allocator: std.mem.Allocator, index_start: usize, index_end: usize) Error!JStringUnmanaged {
         if (index_start >= index_end or index_start >= this.len()) {
             return JStringUnmanaged.newEmpty(allocator);
         }
@@ -1624,7 +1648,7 @@ pub const JStringUnmanaged = struct {
     // ** split
 
     /// pay attention that this function will not consider spaces in non-ascii.
-    fn _splitToUtf8Chars(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: usize, comptime with_spaces: bool) anyerror![]JStringUnmanaged {
+    fn _splitToUtf8Chars(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: usize, comptime with_spaces: bool) Error![]JStringUnmanaged {
         if (limit == 0) {
             return try allocator.alloc(JStringUnmanaged, 0);
         }
@@ -1671,7 +1695,7 @@ pub const JStringUnmanaged = struct {
     /// split by simple seperator([]const u8). If you need to split by white spaces, use `splitByWhiteSpace`, or
     /// even more advanced `splitByRegex` (need to enable pcre support). Given limit negative value to split any many
     /// as possible.
-    pub fn split(this: *JStringUnmanaged, allocator: std.mem.Allocator, seperator: []const u8, limit: isize) anyerror![]JStringUnmanaged {
+    pub fn split(this: *JStringUnmanaged, allocator: std.mem.Allocator, seperator: []const u8, limit: isize) Error![]JStringUnmanaged {
         const real_limit = brk: {
             if (limit < 0) {
                 break :brk this.str_slice.len;
@@ -1724,12 +1748,12 @@ pub const JStringUnmanaged = struct {
     }
 
     /// Split by ascii whitespaces (" \t\n\r"), or called explode in languages like PHP (which is the best language! :))
-    pub inline fn splitByWhiteSpace(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) anyerror![]JStringUnmanaged {
+    pub inline fn splitByWhiteSpace(this: *JStringUnmanaged, allocator: std.mem.Allocator, limit: isize) Error![]JStringUnmanaged {
         return this.explode(allocator, limit);
     }
 
     /// Split based on regex matching. With greate power comes great responsibility.
-    pub fn splitByRegex(this: *JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, limit: isize) anyerror![]JStringUnmanaged {
+    pub fn splitByRegex(this: *JStringUnmanaged, allocator: std.mem.Allocator, pattern: []const u8, offset: usize, limit: isize) Error![]JStringUnmanaged {
         if (enable_pcre) {
             const real_limit = brk: {
                 if (limit < 0) {
@@ -1828,7 +1852,7 @@ pub const JStringUnmanaged = struct {
 
     // ** toLocaleLowerCase
 
-    pub fn toLocaleLowerCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub fn toLocaleLowerCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error!JStringUnmanaged {
         _ = this;
         _ = allocator;
         @compileError("TODO, not yet implemented!");
@@ -1836,7 +1860,7 @@ pub const JStringUnmanaged = struct {
 
     // ** toLocaleUpperCase
 
-    pub fn toLocalUpperCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub fn toLocalUpperCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error!JStringUnmanaged {
         _ = this;
         _ = allocator;
         @compileError("TODO, not yet implemented!");
@@ -1844,7 +1868,7 @@ pub const JStringUnmanaged = struct {
 
     // ** toLowerCase
 
-    pub fn toLowerCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub fn toLowerCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error!JStringUnmanaged {
         if (this.len() == 0) {
             return JStringUnmanaged.newEmpty(allocator);
         }
@@ -1866,7 +1890,7 @@ pub const JStringUnmanaged = struct {
 
     // ** toUpperCase
 
-    pub fn toUpperCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub fn toUpperCase(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error!JStringUnmanaged {
         if (this.len() == 0) {
             return JStringUnmanaged.newEmpty(allocator);
         }
@@ -1897,7 +1921,7 @@ pub const JStringUnmanaged = struct {
     // ** trim
 
     /// essentially =trimStart(trimEnd()). All temp strings produced in steps are deinited.
-    pub fn trim(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub fn trim(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error!JStringUnmanaged {
         const str1 = try this.trimStart(allocator);
         if (str1.len() == 0) {
             return str1;
@@ -1911,7 +1935,7 @@ pub const JStringUnmanaged = struct {
 
     /// trim blank chars(' ', '\t', '\n' and '\r') from the end. If there is nothing to trim it will return a clone of
     /// original string.
-    pub fn trimEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub fn trimEnd(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error!JStringUnmanaged {
         const first_nonblank = brk: {
             var i = this.str_slice.len - 1;
             while (i >= 0) {
@@ -1943,7 +1967,7 @@ pub const JStringUnmanaged = struct {
 
     /// trim blank chars(' ', '\t', '\n' and '\r') from beginning. If there is nothing to trim it will return a clone
     /// of original string.
-    pub fn trimStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator) anyerror!JStringUnmanaged {
+    pub fn trimStart(this: *const JStringUnmanaged, allocator: std.mem.Allocator) Error!JStringUnmanaged {
         const first_nonblank = brk: {
             for (this.str_slice, 0..) |char, i| {
                 switch (char) {
@@ -2293,11 +2317,11 @@ fn defineRegex(comptime with_pcre: bool) type {
             pub const DefaultRegexOptions = RegexUnmanaged.DefaultRegexOptions;
             pub const DefaultMatchOptions = RegexUnmanaged.DefaultMatchOptions;
 
-            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32) anyerror!Self {
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32) !Self {
                 return Self.initWithExtraRegexOptions(allocator, pattern, regex_options, 0);
             }
 
-            pub fn initWithExtraRegexOptions(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, regex_extra_options: u32) anyerror!Self {
+            pub fn initWithExtraRegexOptions(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, regex_extra_options: u32) !Self {
                 return Self{
                     .allocator = allocator,
                     .unmanaged = try RegexUnmanaged.initWithExtraRegexOptions(allocator, pattern, regex_options, regex_extra_options),
@@ -2352,23 +2376,23 @@ fn defineRegex(comptime with_pcre: bool) type {
                 this.unmanaged.deinit(this.allocator);
             }
 
-            pub inline fn reset(this: *Self) anyerror!void {
+            pub inline fn reset(this: *Self) !void {
                 return this.unmanaged.reset(this.allocator);
             }
 
-            pub inline fn match(this: *Self, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
+            pub inline fn match(this: *Self, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) !void {
                 return this.unmanaged.match(this.allocator, subject_slice, offset_pos, fetch_results, match_options);
             }
 
-            pub inline fn getNextOffset(this: *Self, subject_slice: []const u8) anyerror!usize {
+            pub inline fn getNextOffset(this: *Self, subject_slice: []const u8) !usize {
                 return this.unmanaged.getNextOffset(subject_slice);
             }
 
-            pub inline fn fetchResults(this: *Self) anyerror!void {
+            pub inline fn fetchResults(this: *Self) !void {
                 try this.unmanaged.fetchResults(this.allocator);
             }
 
-            pub inline fn matchAll(this: *Self, subject_slice: []const u8, offset_pos: usize, match_options: u32) anyerror!void {
+            pub inline fn matchAll(this: *Self, subject_slice: []const u8, offset_pos: usize, match_options: u32) !void {
                 try this.unmanaged.matchAll(this.allocator, subject_slice, offset_pos, match_options);
             }
         };
@@ -2376,7 +2400,7 @@ fn defineRegex(comptime with_pcre: bool) type {
         return struct {
             const Self = @This();
 
-            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) !Self {
                 _ = allocator;
                 _ = pattern;
                 _ = regex_options;
@@ -2394,8 +2418,13 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
         // try it here: https://regex101.com/
         return struct {
             const Self = @This();
-            const MatchedResultsList = std.SinglyLinkedList([]pcre.RegexMatchResult);
-            const MatchedGroupResultsList = std.SinglyLinkedList([]pcre.RegexGroupResult);
+            pub const MatchedResultsList = std.SinglyLinkedList([]pcre.RegexMatchResult);
+            pub const MatchedGroupResultsList = std.SinglyLinkedList([]pcre.RegexGroupResult);
+            pub const Error = error{
+                RegexBadPattern,
+                RegexFetchBeforeMatch,
+                OutOfMemory,
+            };
 
             pub const MatchedResultIterator = struct {
                 const Result = struct {
@@ -2550,13 +2579,13 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 } else return null;
             }
 
-            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32) anyerror!Self {
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32) Error!Self {
                 // last 0 means no extra regex options, which should be used 99% of time, unless you know
                 // this doc well: https://pcre.org/current/doc/html/pcre2api.html
                 return Self.initWithExtraRegexOptions(allocator, pattern, regex_options, 0);
             }
 
-            pub fn initWithExtraRegexOptions(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, regex_extra_options: u32) anyerror!Self {
+            pub fn initWithExtraRegexOptions(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, regex_extra_options: u32) Error!Self {
                 if (pattern.len == 0) {
                     return JStringError.RegexBadPattern;
                 }
@@ -2597,7 +2626,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
 
             /// reset regex for next new match. This will only reset matched_results & matched_group_results & free
             /// pcre underlying match object.
-            pub fn reset(this: *Self, allocator: std.mem.Allocator) anyerror!void {
+            pub fn reset(this: *Self, allocator: std.mem.Allocator) Error!void {
                 if (this.total_matched_results > 0) {
                     allocator.free(this.matched_results);
                     this.total_matched_results = 0;
@@ -2615,7 +2644,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             /// `this.getNextOffset(subject)` for it. The regex syntax used is pcre2, can read
             /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here:
             /// https://regex101.com/
-            pub fn match(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) anyerror!void {
+            pub fn match(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, fetch_results: bool, match_options: u32) Error!void {
                 this.context_.match_options = match_options;
                 const m = pcre.match(this.context_, subject_slice[0..].ptr, subject_slice.len, offset_pos);
                 if (m > 0) {
@@ -2627,7 +2656,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             }
 
             /// must call after successful match, otherwise error
-            pub fn getNextOffset(this: *Self, subject_slice: []const u8) anyerror!usize {
+            pub fn getNextOffset(this: *Self, subject_slice: []const u8) Error!usize {
                 if (this.context_.with_match_result == 1) {
                     if (this.matchSucceed()) {
                         pcre.get_next_offset(this.context_, subject_slice[0..].ptr, subject_slice.len);
@@ -2641,7 +2670,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             }
 
             /// only for single match fetchResults lazily. For matchAll it will always fetch while match.
-            pub fn fetchResults(this: *Self, allocator: std.mem.Allocator) anyerror!void {
+            pub fn fetchResults(this: *Self, allocator: std.mem.Allocator) Error!void {
                 if (this.matchSucceed()) {
                     pcre.fetch_match_results(this.context_);
                     if (this.context_.matched_count > 0) {
@@ -2662,7 +2691,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
             /// matchAll will do `fetchResults` in anyway. The regex syntax used is pcre2, can read
             /// here: https://pcre2project.github.io/pcre2/doc/html/pcre2pattern.html, or try it here:
             /// https://regex101.com/.
-            pub fn matchAll(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, match_options: u32) anyerror!void {
+            pub fn matchAll(this: *Self, allocator: std.mem.Allocator, subject_slice: []const u8, offset_pos: usize, match_options: u32) Error!void {
                 this.context_.match_options = match_options;
                 var m: i64 = 0;
                 var offset: usize = offset_pos;
@@ -2698,7 +2727,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 try this._mergeMatchedGroupResults(allocator, matched_group_result_count);
             }
 
-            fn _mergeMatchedResults(this: *Self, allocator: std.mem.Allocator, matched_count: usize) anyerror!void {
+            fn _mergeMatchedResults(this: *Self, allocator: std.mem.Allocator, matched_count: usize) Error!void {
                 if (this.total_matched_results > 0) {
                     @panic("must not enter this function before reset");
                 }
@@ -2728,7 +2757,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
                 }
             }
 
-            fn _mergeMatchedGroupResults(this: *Self, allocator: std.mem.Allocator, matched_group_count: usize) anyerror!void {
+            fn _mergeMatchedGroupResults(this: *Self, allocator: std.mem.Allocator, matched_group_count: usize) Error!void {
                 if (this.total_matched_group_results > 0) {
                     @panic("must not enter this function before reset");
                 }
@@ -2762,7 +2791,7 @@ fn defineRegexUnmanaged(comptime with_pcre: bool) type {
         return struct {
             const Self = @This();
 
-            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) anyerror!Self {
+            pub fn init(allocator: std.mem.Allocator, pattern: []const u8, regex_options: u32, match_options: u32) !Self {
                 _ = allocator;
                 _ = pattern;
                 _ = regex_options;
@@ -2830,9 +2859,13 @@ fn _bufPrintSpecifier(comptime type_info: std.builtin.Type, comptime fmt_buf: []
 // take advantage of both matched results and group matched results are sorted based on start when taking out of pcre,
 // do a merge algorithm here
 const _MatchedGapIterator = struct {
-    const Gap = struct {
+    pub const Gap = struct {
         start: usize,
         len: usize,
+    };
+
+    pub const Error = error{
+        RegexMatchOverlapped,
     };
 
     it: RegexUnmanaged.MatchedResultIterator,
@@ -2851,7 +2884,7 @@ const _MatchedGapIterator = struct {
         };
     }
 
-    pub fn nextGap(this: *_MatchedGapIterator) anyerror!?Gap {
+    pub fn nextGap(this: *_MatchedGapIterator) Error!?Gap {
         if (this.it_should_fetch) {
             this.maybe_result = this.it.nextResult();
             this.it_should_fetch = false;
@@ -2878,7 +2911,7 @@ const _MatchedGapIterator = struct {
         return null;
     }
 
-    fn _nextGapFromIt(this: *_MatchedGapIterator, r: RegexUnmanaged.MatchedResultIterator.Result) anyerror!?Gap {
+    fn _nextGapFromIt(this: *_MatchedGapIterator, r: RegexUnmanaged.MatchedResultIterator.Result) Gap {
         this.it_should_fetch = true;
         if (this.last_start == r.start and this.last_len == r.len) {
             // can never reach here because we can reach here either
@@ -2907,7 +2940,7 @@ const _MatchedGapIterator = struct {
         }
     }
 
-    fn _nextGapFromGroupIt(this: *_MatchedGapIterator, gr: RegexUnmanaged.MatchedGroupResultIterator.Result) anyerror!?Gap {
+    fn _nextGapFromGroupIt(this: *_MatchedGapIterator, gr: RegexUnmanaged.MatchedGroupResultIterator.Result) Error!?Gap {
         this.group_it_should_fetch = true;
         if (this.last_start == gr.start and this.last_len == gr.len) {
             return this.nextGap();
@@ -2943,7 +2976,7 @@ fn _sliceAt(comptime T: type, haystack: []const T, index: isize) T {
     }
 }
 
-fn _kmpBuildFailureTable(allocator: std.mem.Allocator, needle_slice: []const u8) anyerror![]isize {
+fn _kmpBuildFailureTable(allocator: std.mem.Allocator, needle_slice: []const u8) ![]isize {
     const t = try allocator.alloc(isize, (needle_slice.len + 1));
     @memset(t, 0);
 
@@ -2967,7 +3000,7 @@ fn _kmpBuildFailureTable(allocator: std.mem.Allocator, needle_slice: []const u8)
     return t;
 }
 
-fn _testCreateErrorUnion(value_or_error: bool, comptime T: type, value: T, err: anyerror) anyerror!T {
+fn _testCreateErrorUnion(value_or_error: bool, comptime T: type, value: T, err: anyerror) !T {
     return if (value_or_error) value else err;
 }
 
