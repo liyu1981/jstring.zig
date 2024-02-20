@@ -1,3 +1,3 @@
-ZIG=/Users/bytedance/DevCamp/bun/.cache/zig/zig
+ZIG=zig
 # clear
 $ZIG $@
