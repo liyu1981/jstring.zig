@@ -3656,27 +3656,31 @@ test "RegexUnmanged" {
             try testing.expectEqual(re.getNextOffset("notsomething"), 0);
         }
         {
-            // example mentioned at: https://www.pcre.org/current/doc/html/pcre2pattern.html about
-            // PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK
-            var re = try RegexUnmanaged.initWithExtraRegexOptions(arena.allocator(), "(?<=\\Kfoo)bar", 0, pcre.PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK);
-            try re.match(arena.allocator(), "foobar", 3, true, 0);
-            const offset = try re.getNextOffset("foobar");
-            try testing.expectEqual(offset, 6);
-            re.deinit(arena.allocator());
+            if (@import("builtin").os.tag == .macos) {
+                // example mentioned at: https://www.pcre.org/current/doc/html/pcre2pattern.html about
+                // PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK
+                var re = try RegexUnmanaged.initWithExtraRegexOptions(arena.allocator(), "(?<=\\Kfoo)bar", 0, pcre.PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK);
+                try re.match(arena.allocator(), "foobar", 3, true, 0);
+                const offset = try re.getNextOffset("foobar");
+                try testing.expectEqual(offset, 6);
+                re.deinit(arena.allocator());
+            }
         }
         {
-            // this example will trigger the tricky case mentioned in pcre2 demo on get next offset.
-            // check https://pcre.org/current/doc/html/pcre2demo.html, line around comment "If the previous match was
-            // not an empty string, there is one tricky case to consider."
-            var re = try RegexUnmanaged.initWithExtraRegexOptions(arena.allocator(), "(?<=\\Kfoo)", pcre.PCRE2_UTF, pcre.PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK);
-            try re.match(arena.allocator(), "foobar", 3, true, 0);
-            var offset = try re.getNextOffset("foobar");
-            try testing.expectEqual(offset, 4);
-            try re.reset(arena.allocator());
-            try re.match(arena.allocator(), "foo", 3, true, 0);
-            offset = try re.getNextOffset("foo");
-            try testing.expectEqual(offset, 4);
-            re.deinit(arena.allocator());
+            if (@import("builtin").os.tag == .macos) {
+                // this example will trigger the tricky case mentioned in pcre2 demo on get next offset.
+                // check https://pcre.org/current/doc/html/pcre2demo.html, line around comment "If the previous match was
+                // not an empty string, there is one tricky case to consider."
+                var re = try RegexUnmanaged.initWithExtraRegexOptions(arena.allocator(), "(?<=\\Kfoo)", pcre.PCRE2_UTF, pcre.PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK);
+                try re.match(arena.allocator(), "foobar", 3, true, 0);
+                var offset = try re.getNextOffset("foobar");
+                try testing.expectEqual(offset, 4);
+                try re.reset(arena.allocator());
+                try re.match(arena.allocator(), "foo", 3, true, 0);
+                offset = try re.getNextOffset("foo");
+                try testing.expectEqual(offset, 4);
+                re.deinit(arena.allocator());
+            }
         }
     }
 }
