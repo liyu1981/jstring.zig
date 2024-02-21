@@ -35,7 +35,7 @@ try testing.expect(results[3].eqlSlice("d"));
 # usage
 
 ```bash
-zig fetch --save https://github.com/liyu1981/jstring.zig/archive/refs/tags/0.1.0.tar.gz
+zig fetch --save https://github.com/liyu1981/jstring.zig/archive/refs/tags/0.1.1.tar.gz
 ```
 
 check `example` folder for a sample project
