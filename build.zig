@@ -7,7 +7,7 @@ pub fn linkPCRE(
     exe_compile.addCSourceFile(.{
         .file = .{
             .path = jstring_dep.builder.pathFromRoot(
-                jstring_dep.module("pcre_binding.c").source_file.path,
+                jstring_dep.module("pcre_binding.c").root_source_file.?.path,
             ),
         },
         .flags = &.{"-std=c17"},
