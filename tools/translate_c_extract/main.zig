@@ -247,7 +247,31 @@ fn parseHeader(allocator: std.mem.Allocator, f: std.fs.File, file_name: JString)
 
 fn parseAutogen(allocator: std.mem.Allocator, f: std.fs.File) anyerror![]JString {
     var all_content = try JString.newFromFile(allocator, f);
-    return all_content.split(";", -1);
+    defer all_content.deinit();
+    const lines = try all_content.split("\n", -1);
+    defer jstring.freeJStringArray(lines);
+    var chunks = std.ArrayList(JString).init(allocator);
+    defer chunks.deinit();
+    var tmp_line = try JString.newEmpty(allocator);
+    for (lines) |line| {
+        if (line.startsWithSlice("pub ")) {
+            if (!tmp_line.isEmpty()) {
+                try chunks.append(tmp_line);
+            }
+            tmp_line = try JString.newFromJString(line);
+        } else {
+            const new_tmp_line = try JString.newFromFormat(allocator, "{s}\n{s}", .{ tmp_line, line });
+            tmp_line.deinit();
+            tmp_line = new_tmp_line;
+        }
+    }
+    if (!tmp_line.isEmpty()) {
+        try chunks.append(tmp_line);
+    }
+    // for (chunks.items) |c| {
+    //     std.debug.print("chunk>: {s}\n", .{c});
+    // }
+    return try chunks.toOwnedSlice();
 }
 
 fn extract(header_provides: HeaderParser.ProvideHashMap, autogen_chunks: []JString, writer: std.fs.File.Writer) anyerror!usize {
@@ -255,13 +279,25 @@ fn extract(header_provides: HeaderParser.ProvideHashMap, autogen_chunks: []JStri
     for (0..autogen_chunks.len) |i| {
         var chunk = autogen_chunks[i];
         // split by space/parenthesis, so variable name or function name will be seperated
-        const tokens = try chunk.splitByRegex("[\\s\\(\\)]", 0, -1);
+        const tokens = brk: {
+            break :brk chunk.splitByRegex("[\\s\\(\\)]", 0, -1) catch {
+                // special case, whole chunk is a token
+                const hash = chunk.hash();
+                if (header_provides.contains(hash)) {
+                    try writer.print("{s};\n", .{chunk});
+                    count += 1;
+                    continue;
+                } else {
+                    continue;
+                }
+            };
+        };
         defer jstring.freeJStringArray(tokens);
         // very naive algorithm, just check whether there is any token is provided from header
         for (tokens) |token| {
             const hash = token.hash();
             if (header_provides.contains(hash)) {
-                try writer.print("{s};\n", .{chunk});
+                try writer.print("{s}\n", .{chunk});
                 count += 1;
                 break;
             }

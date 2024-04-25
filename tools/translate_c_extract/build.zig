@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const jstring_module = b.createModule(.{
-        .source_file = .{ .path = "../../src/jstring.zig" },
+        .root_source_file = .{ .path = "../../src/jstring.zig" },
     });
 
     const exe = b.addExecutable(.{
@@ -14,9 +14,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.addModule("jstring", jstring_module);
+    exe.root_module.addImport("jstring", jstring_module);
     exe.addObjectFile(.{ .path = "../../zig-out/lib/libpcre_binding.a" });
     exe.linkSystemLibrary2("libpcre2-8", .{ .use_pkg_config = .yes });
+    exe.linkLibC();
 
     b.installArtifact(exe);
 

@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    obj_pcre_binding.linkLibC();
     obj_pcre_binding.addCSourceFile(
         .{
             .file = .{ .path = "src/pcre/pcre_binding.c" },
