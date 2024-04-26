@@ -261,12 +261,7 @@ pub const JString = struct {
         if (rest_items.len == 0) {
             return this.clone();
         } else {
-            const fmt_const = comptime brk: {
-                var fmt_final: [fmt.len]u8 = undefined;
-                for (0..fmt.len) |i| fmt_final[i] = fmt[i];
-                break :brk fmt_final;
-            };
-            var rest_items_unmanaged_jstring = try JStringUnmanaged.newFromFormat(this.allocator, &fmt_const, rest_items);
+            var rest_items_unmanaged_jstring = try JStringUnmanaged.newFromFormat(this.allocator, fmt, rest_items);
             defer rest_items_unmanaged_jstring.deinit(this.allocator);
             var rest_items_jstrings = [1]JString{JString{ .allocator = this.allocator, .unmanaged = rest_items_unmanaged_jstring }};
             return this.concatMany(&rest_items_jstrings);
@@ -286,17 +281,20 @@ pub const JString = struct {
         }
 
         // max 32 arguments, and each of them will not have long (<8) specifier
-        comptime var fmt_buf: [8 * 32]u8 = undefined;
-        _ = &fmt_buf;
-        comptime var fmt_len: usize = 0;
-        comptime {
+        const fmt_const = comptime brk: {
+            var fmt_buf: [8 * 32]u8 = undefined;
+            _ = &fmt_buf;
+            var fmt_len: usize = 0;
             var fmt_print_slice: []u8 = fmt_buf[0..];
             for (fields_info) |field_info| {
                 _bufPrintFmt(@typeInfo(field_info.type), &fmt_buf, &fmt_len, &fmt_print_slice);
             }
-        }
+            var fmt_final: [fmt_len]u8 = undefined;
+            for (0..fmt_len) |i| fmt_final[i] = fmt_buf[i];
+            break :brk fmt_final;
+        };
 
-        return this.concatFormat(fmt_buf[0..fmt_len], rest_items);
+        return this.concatFormat(&fmt_const, rest_items);
     }
 
     // ** endsWith
@@ -751,6 +749,7 @@ pub const JStringUnmanaged = struct {
             for (0..fmt_len) |i| fmt_final[i] = fmt_buf[i];
             break :brk fmt_final;
         };
+
         return JStringUnmanaged.newFromFormat(allocator, &fmt, rest_items);
     }
 
@@ -1148,6 +1147,7 @@ pub const JStringUnmanaged = struct {
             for (0..fmt_len) |i| fmt_final[i] = fmt_buf[i];
             break :brk fmt_final;
         };
+
         return this.concatFormat(allocator, &fmt, rest_items);
     }
 
