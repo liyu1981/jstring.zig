@@ -25,16 +25,14 @@ pub fn build(b: *std.Build) void {
     _ = b.addModule(
         "jstring",
         .{
-            .root_source_file = .{ .path = "src/jstring.zig" },
+            .root_source_file = b.path("src/jstring.zig"),
         },
     );
 
     _ = b.addModule(
         "pcre_binding.c",
         .{
-            .root_source_file = .{
-                .path = b.pathFromRoot("src/pcre/pcre_binding.c"),
-            },
+            .root_source_file = b.path("src/pcre/pcre_binding.c"),
         },
     );
 
@@ -47,7 +45,7 @@ pub fn build(b: *std.Build) void {
     obj_pcre_binding.linkLibC();
     obj_pcre_binding.addCSourceFile(
         .{
-            .file = .{ .path = "src/pcre/pcre_binding.c" },
+            .file = b.path("src/pcre/pcre_binding.c"),
             .flags = &.{"-std=c17"},
         },
     );
@@ -66,7 +64,7 @@ pub fn build(b: *std.Build) void {
 
     const jstring_lib = b.addStaticLibrary(.{
         .name = "jstring",
-        .root_source_file = .{ .path = "src/jstring.zig" },
+        .root_source_file = b.path("src/jstring.zig"),
         .target = target,
         .optimize = optimize,
     });
