@@ -180,7 +180,7 @@ pub const JString = struct {
 
     // ** at
 
-    pub inline fn at(this: *JString, index: isize) !u21 {
+    pub inline fn at(this: *const JString, index: isize) !u21 {
         return this.unmanaged.at(index);
     }
 
@@ -948,7 +948,7 @@ pub const JStringUnmanaged = struct {
     /// different to Javascript's string.at, return unicode char(u21) of index, as prefer utf-8 string. Same to
     /// Javascript, accept index as `i32`: when postive is from beginning; when negative is from ending; when
     /// `index == 0`, return the the first char if not empty.
-    pub fn at(this: *JStringUnmanaged, index: isize) Error!u21 {
+    pub fn at(this: *const JStringUnmanaged, index: isize) Error!u21 {
         const utf8_len = try this.utf8Len();
         if (index >= utf8_len) {
             return error.IndexOutOfBounds;
